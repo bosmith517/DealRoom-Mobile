@@ -15,10 +15,7 @@ import React, {
 } from 'react'
 import { createClient, Session, User } from '@supabase/supabase-js'
 import * as SecureStore from 'expo-secure-store'
-import { MMKV } from 'react-native-mmkv'
-
-// Initialize MMKV for general storage
-const storage = new MMKV()
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 // Supabase URL and Anon Key (safe to expose)
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eskpnhbemnxkxafjbbdx.supabase.co'
@@ -128,8 +125,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           console.error('Error fetching entitlements:', entitlementError)
         } else {
           setEntitlements(entitlementData || [])
-          // Cache entitlements in MMKV
-          storage.set('cached_entitlements', JSON.stringify(entitlementData))
+          // Cache entitlements in AsyncStorage (fire and forget)
+          AsyncStorage.setItem('@dealroom:cached_entitlements', JSON.stringify(entitlementData)).catch(() => {})
         }
       }
     } catch (error) {
@@ -162,7 +159,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         } else if (event === 'SIGNED_OUT') {
           setTenantId(null)
           setEntitlements([])
-          storage.delete('cached_entitlements')
+          AsyncStorage.removeItem('@dealroom:cached_entitlements').catch(() => {})
         }
       }
     )
