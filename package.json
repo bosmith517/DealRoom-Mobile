@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^14.0.4",
-    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-async-storage/async-storage": "^2.1.0",
     "@react-native-community/netinfo": "~11.4.1",
     "@supabase/supabase-js": "^2.45.0",
     "expo": "~54.0.0",
     "expo-camera": "~17.0.0",
     "expo-constants": "~18.0.0",
-    "expo-dev-client": "~6.0.20",
+    "expo-dev-client": "~6.0.0",
     "expo-file-system": "~19.0.0",
     "expo-image-manipulator": "~14.0.0",
     "expo-image-picker": "~17.0.0",
@@ -34,8 +34,11 @@
     "react-native-url-polyfill": "^2.0.0"
   },
   "devDependencies": {
-    "@types/react": "~18.3.0",
+    "@types/react": "~19.0.0",
     "typescript": "~5.8.0"
+  },
+  "overrides": {
+    "@types/react": "~19.0.0"
   },
   "private": true
 }
