@@ -1,0 +1,58 @@
+# EAS Build Ignore File
+# Excludes files not needed for the build
+
+# Node modules (EAS installs fresh from package.json)
+node_modules/
+
+# Build artifacts
+.expo/
+dist/
+build/
+web-build/
+*.tsbuildinfo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Test
+coverage/
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# Git
+.git/
+.gitignore
+
+# Local env (EAS has its own)
+.env.local
+.env.*.local
+
+# Documentation
+*.md
+!README.md
+
+# Large files
+*.mp4
+*.mov
+*.avi
+*.zip
+*.tar
+*.gz
+
+# Parent directories - CRITICAL
+# EAS should only look at this directory
+../
