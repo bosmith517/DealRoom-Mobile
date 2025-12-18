@@ -41,7 +41,9 @@ function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
     }
 
     // Authenticated - check entitlement
-    const entitled = hasEntitlement('dealroom')
+    // TODO: Re-enable when subscription flow is ready
+    // const entitled = hasEntitlement('dealroom')
+    const entitled = true // Bypass for development
 
     if (!entitled) {
       // Not entitled - force to upgrade from anywhere except upgrade
