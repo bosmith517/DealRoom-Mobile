@@ -16,7 +16,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.tradeworkspro.dealroom",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Allow DealRoom to access your camera to capture property photos.",
+        "NSPhotoLibraryUsageDescription": "Allow DealRoom to access your photos to upload property images."
       }
     },
     "android": {
@@ -27,7 +29,6 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
@@ -40,14 +41,9 @@
       "expo-router",
       "expo-secure-store",
       [
-        "expo-camera",
-        {
-          "cameraPermission": "Allow DealRoom to access your camera to capture property photos."
-        }
-      ],
-      [
         "expo-image-picker",
         {
+          "cameraPermission": "Allow DealRoom to access your camera to capture property photos.",
           "photosPermission": "Allow DealRoom to access your photos to upload property images."
         }
       ],

@@ -2,11 +2,11 @@
  * useCamera Hook
  *
  * Camera permission handling and photo capture for evaluations.
+ * Uses expo-image-picker for all camera functionality.
  */
 
 import { useState, useCallback } from 'react'
 import * as ImagePicker from 'expo-image-picker'
-import { Camera } from 'expo-camera'
 import { Alert, Linking } from 'react-native'
 
 // ============================================================================
@@ -57,8 +57,8 @@ export function useCamera(options: CameraOptions = {}): UseCameraResult {
     setIsLoading(true)
 
     try {
-      // Request camera permission
-      const cameraResult = await Camera.requestCameraPermissionsAsync()
+      // Request camera permission using ImagePicker
+      const cameraResult = await ImagePicker.requestCameraPermissionsAsync()
 
       if (cameraResult.status === 'granted') {
         setHasPermission(true)
