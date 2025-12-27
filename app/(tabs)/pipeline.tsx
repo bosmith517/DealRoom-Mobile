@@ -1,25 +1,44 @@
 /**
  * Pipeline Screen
  *
- * Kanban-style deal pipeline view.
+ * Kanban-style deal pipeline view with real data from Supabase.
  */
 
-import { useState } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native'
+import { useState, useEffect, useCallback } from 'react'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native'
 import { Link } from 'expo-router'
 import { ScreenContainer, Card } from '../../src/components'
 import { colors, spacing, typography, radii, shadows } from '../../src/theme'
-import { DEAL_STAGE_CONFIG, DealStage } from '../../src/types'
+import { DEAL_STAGE_CONFIG } from '../../src/types'
+import { getDeals } from '../../src/services'
+import type { DealStage, DealWithProperty } from '../../src/types'
 
-// Mock deals data
-const MOCK_DEALS = [
-  { id: '1', address: '123 Main St', city: 'Chicago', stage: 'lead' as DealStage, arv: 285000, daysInStage: 3 },
-  { id: '2', address: '456 Oak Ave', city: 'Naperville', stage: 'researching' as DealStage, arv: 425000, daysInStage: 5 },
-  { id: '3', address: '789 Pine Rd', city: 'Aurora', stage: 'negotiating' as DealStage, arv: 195000, daysInStage: 12 },
-  { id: '4', address: '321 Elm St', city: 'Evanston', stage: 'under_contract' as DealStage, arv: 310000, daysInStage: 7 },
-  { id: '5', address: '654 Maple Dr', city: 'Schaumburg', stage: 'due_diligence' as DealStage, arv: 275000, daysInStage: 4 },
-  { id: '6', address: '987 Cedar Ln', city: 'Oak Park', stage: 'closing' as DealStage, arv: 365000, daysInStage: 2 },
+// Visible stages for pipeline view (active stages only)
+const PIPELINE_STAGES: DealStage[] = [
+  'lead',
+  'researching',
+  'evaluating',
+  'analyzing',
+  'offer_pending',
+  'under_contract',
+  'due_diligence',
+  'closing',
 ]
+
+// Calculate days in current stage
+function getDaysInStage(stageEnteredAt: string): number {
+  const entered = new Date(stageEnteredAt)
+  const now = new Date()
+  return Math.floor((now.getTime() - entered.getTime()) / (1000 * 60 * 60 * 24))
+}
+
+// Format price
+function formatPrice(value: number): string {
+  if (value >= 1000000) {
+    return `$${(value / 1000000).toFixed(1)}M`
+  }
+  return `$${(value / 1000).toFixed(0)}K`
+}
 
 // Stage column component
 function StageColumn({
@@ -27,7 +46,7 @@ function StageColumn({
   deals,
 }: {
   stage: DealStage
-  deals: typeof MOCK_DEALS
+  deals: DealWithProperty[]
 }) {
   const config = DEAL_STAGE_CONFIG[stage]
   const stageDeals = deals.filter((d) => d.stage === stage)
@@ -48,43 +67,85 @@ function StageColumn({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.stageContent}
       >
-        {stageDeals.map((deal) => (
-          <Link key={deal.id} href={`/property/${deal.id}`} asChild>
-            <TouchableOpacity activeOpacity={0.7}>
-              <Card style={styles.dealCard} padding="sm">
-                <Text style={styles.dealAddress} numberOfLines={1}>
-                  {deal.address}
-                </Text>
-                <Text style={styles.dealCity}>{deal.city}</Text>
-                <View style={styles.dealMeta}>
-                  <Text style={styles.dealArv}>
-                    ${(deal.arv / 1000).toFixed(0)}K
-                  </Text>
-                  <Text style={styles.dealDays}>{deal.daysInStage}d</Text>
-                </View>
-              </Card>
-            </TouchableOpacity>
-          </Link>
-        ))}
+        {stageDeals.length === 0 ? (
+          <View style={styles.emptyStage}>
+            <Text style={styles.emptyStageText}>No deals</Text>
+          </View>
+        ) : (
+          stageDeals.map((deal) => {
+            const address = deal.property?.address_line1 || deal.deal_name || 'Unnamed'
+            const city = deal.property?.city || ''
+            const price = deal.contract_price || deal.offer_price || deal.asking_price || 0
+            const daysInStage = getDaysInStage(deal.stage_entered_at)
+
+            return (
+              <Link key={deal.id} href={`/property/${deal.id}`} asChild>
+                <TouchableOpacity activeOpacity={0.7}>
+                  <Card style={styles.dealCard} padding="sm">
+                    <Text style={styles.dealAddress} numberOfLines={1}>
+                      {address}
+                    </Text>
+                    {city && <Text style={styles.dealCity}>{city}</Text>}
+                    <View style={styles.dealMeta}>
+                      {price > 0 && (
+                        <Text style={styles.dealPrice}>{formatPrice(price)}</Text>
+                      )}
+                      <Text style={styles.dealDays}>{daysInStage}d</Text>
+                    </View>
+                  </Card>
+                </TouchableOpacity>
+              </Link>
+            )
+          })
+        )}
       </ScrollView>
     </View>
   )
 }
 
-// Visible stages for pipeline view
-const PIPELINE_STAGES: DealStage[] = [
-  'lead',
-  'researching',
-  'contacted',
-  'negotiating',
-  'offer_sent',
-  'under_contract',
-  'due_diligence',
-  'closing',
-]
-
 export default function PipelineScreen() {
+  const [deals, setDeals] = useState<DealWithProperty[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selectedStage, setSelectedStage] = useState<DealStage | 'all'>('all')
+
+  const fetchDeals = useCallback(async () => {
+    try {
+      const { data, error } = await getDeals({ status: 'active', limit: 100 })
+      if (error) {
+        console.error('Error fetching pipeline deals:', error)
+      } else {
+        setDeals(data)
+      }
+    } catch (err) {
+      console.error('Pipeline fetch error:', err)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchDeals()
+  }, [fetchDeals])
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true)
+    fetchDeals()
+  }, [fetchDeals])
+
+  const totalDeals = deals.length
+
+  if (loading) {
+    return (
+      <ScreenContainer scrollable={false} padding={false}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.brand[500]} />
+          <Text style={styles.loadingText}>Loading pipeline...</Text>
+        </View>
+      </ScreenContainer>
+    )
+  }
 
   return (
     <ScreenContainer scrollable={false} padding={false}>
@@ -92,7 +153,7 @@ export default function PipelineScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Deal Pipeline</Text>
         <View style={styles.headerMeta}>
-          <Text style={styles.dealCount}>{MOCK_DEALS.length} deals</Text>
+          <Text style={styles.dealCount}>{totalDeals} deals</Text>
         </View>
       </View>
 
@@ -147,13 +208,35 @@ export default function PipelineScreen() {
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.kanbanContainer}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.brand[500]}
+          />
+        }
       >
         {PIPELINE_STAGES.filter(
           (stage) => selectedStage === 'all' || selectedStage === stage
         ).map((stage) => (
-          <StageColumn key={stage} stage={stage} deals={MOCK_DEALS} />
+          <StageColumn key={stage} stage={stage} deals={deals} />
         ))}
       </ScrollView>
+
+      {/* Empty State */}
+      {totalDeals === 0 && (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyTitle}>No active deals</Text>
+          <Text style={styles.emptyText}>
+            Create a deal to see it in your pipeline.
+          </Text>
+          <Link href="/property/new" asChild>
+            <TouchableOpacity style={styles.emptyButton}>
+              <Text style={styles.emptyButtonText}>+ New Deal</Text>
+            </TouchableOpacity>
+          </Link>
+        </View>
+      )}
     </ScreenContainer>
   )
 }
@@ -257,6 +340,15 @@ const styles = StyleSheet.create({
   },
   stageContent: {
     gap: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  emptyStage: {
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+  },
+  emptyStageText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[400],
   },
   dealCard: {
     backgroundColor: colors.white,
@@ -277,7 +369,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  dealArv: {
+  dealPrice: {
     fontSize: typography.fontSize.sm,
     fontWeight: typography.fontWeight.bold,
     color: colors.brand[600],
@@ -285,5 +377,46 @@ const styles = StyleSheet.create({
   dealDays: {
     fontSize: typography.fontSize.xs,
     color: colors.slate[400],
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: spacing.sm,
+    color: colors.slate[500],
+    fontSize: typography.fontSize.sm,
+  },
+  emptyContainer: {
+    position: 'absolute',
+    top: '40%',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  emptyTitle: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    marginBottom: spacing.xs,
+  },
+  emptyText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    textAlign: 'center',
+    marginBottom: spacing.md,
+  },
+  emptyButton: {
+    backgroundColor: colors.brand[500],
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.lg,
+  },
+  emptyButtonText: {
+    color: colors.white,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
   },
 })

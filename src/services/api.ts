@@ -34,6 +34,8 @@ interface ApiResponse<T> {
 // ============================================================================
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
+const DEFAULT_TIMEOUT_MS = 30000 // 30 seconds
+const MAX_AUTH_RETRIES = 1 // Retry once on 401
 
 // ============================================================================
 // Helper Functions
@@ -49,32 +51,71 @@ async function getAuthToken(): Promise<string> {
 
 async function fetchWithAuth<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  authRetryCount: number = 0
 ): Promise<ApiResponse<T>> {
   try {
     const token = await getAuthToken()
 
-    const response = await fetch(`${SUPABASE_URL}/functions/v1${endpoint}`, {
-      ...options,
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
-    })
+    // Create abort controller for timeout
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
 
-    const data = await response.json()
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1${endpoint}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...options.headers,
+        },
+      })
 
-    if (!response.ok) {
-      return {
-        data: null,
-        error: data as ApiError,
+      clearTimeout(timeoutId)
+
+      // Handle 401 - attempt token refresh and retry
+      if (response.status === 401 && authRetryCount < MAX_AUTH_RETRIES) {
+        const { error: refreshError } = await supabase.auth.refreshSession()
+        if (!refreshError) {
+          return fetchWithAuth<T>(endpoint, options, authRetryCount + 1)
+        }
+        return {
+          data: null,
+          error: {
+            code: 'AUTH_ERROR',
+            message: 'Session expired. Please log in again.',
+          },
+        }
       }
-    }
 
-    return {
-      data: data as T,
-      error: null,
+      const data = await response.json()
+
+      if (!response.ok) {
+        return {
+          data: null,
+          error: data as ApiError,
+        }
+      }
+
+      return {
+        data: data as T,
+        error: null,
+      }
+    } catch (fetchErr) {
+      clearTimeout(timeoutId)
+
+      // Handle abort (timeout)
+      if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+        return {
+          data: null,
+          error: {
+            code: 'TIMEOUT_ERROR',
+            message: `Request timed out after ${DEFAULT_TIMEOUT_MS / 1000} seconds`,
+          },
+        }
+      }
+      throw fetchErr
     }
   } catch (err) {
     return {

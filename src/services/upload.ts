@@ -58,6 +58,8 @@ const RETRY_DELAY_MS = 1000
 const DEFAULT_MAX_WIDTH = 2048
 const DEFAULT_MAX_HEIGHT = 2048
 const DEFAULT_QUALITY = 0.8
+const DEFAULT_TIMEOUT_MS = 30000 // 30 seconds for API calls
+const UPLOAD_TIMEOUT_MS = 120000 // 2 minutes for file uploads
 
 // Edge Function URLs (relative to Supabase URL)
 const UPLOAD_URL_ENDPOINT = '/functions/v1/media-upload-url'
@@ -278,21 +280,35 @@ class UploadService {
   ): Promise<UploadUrlResponse> {
     const token = await this.getAuthToken()
 
-    const response = await fetch(`${this.supabaseUrl}${UPLOAD_URL_ENDPOINT}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(request),
-    })
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}))
-      throw new Error(error.error || `HTTP ${response.status}`)
+    try {
+      const response = await fetch(`${this.supabaseUrl}${UPLOAD_URL_ENDPOINT}`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+
+      return response.json()
+    } catch (err) {
+      clearTimeout(timeoutId)
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('Request timed out while getting upload URL')
+      }
+      throw err
     }
-
-    return response.json()
   }
 
   /**
@@ -314,21 +330,35 @@ class UploadService {
       const response = await fetch(`data:${mimeType};base64,${base64}`)
       const blob = await response.blob()
 
-      // Upload to signed URL
-      const uploadResponse = await fetch(uploadUrl, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': mimeType,
-        },
-        body: blob,
-      })
+      // Upload to signed URL with timeout
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS)
 
-      if (!uploadResponse.ok) {
-        throw new Error(`Upload failed: HTTP ${uploadResponse.status}`)
+      try {
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'PUT',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': mimeType,
+          },
+          body: blob,
+        })
+
+        clearTimeout(timeoutId)
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Upload failed: HTTP ${uploadResponse.status}`)
+        }
+
+        onProgress?.(1)
+        return { success: true }
+      } catch (err) {
+        clearTimeout(timeoutId)
+        if (err instanceof Error && err.name === 'AbortError') {
+          throw new Error('Upload timed out')
+        }
+        throw err
       }
-
-      onProgress?.(1)
-      return { success: true }
 
     } catch (error) {
       return {
@@ -352,27 +382,47 @@ class UploadService {
   }): Promise<{ success: boolean; mediaId?: string; error?: string }> {
     const token = await this.getAuthToken()
 
-    const response = await fetch(`${this.supabaseUrl}${UPLOAD_COMPLETE_ENDPOINT}`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(params),
-    })
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS)
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}))
+    try {
+      const response = await fetch(`${this.supabaseUrl}${UPLOAD_COMPLETE_ENDPOINT}`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      })
+
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        return {
+          success: false,
+          error: error.error || `HTTP ${response.status}`,
+        }
+      }
+
+      const result = await response.json()
+      return {
+        success: true,
+        mediaId: result.mediaId,
+      }
+    } catch (err) {
+      clearTimeout(timeoutId)
+      if (err instanceof Error && err.name === 'AbortError') {
+        return {
+          success: false,
+          error: 'Request timed out while completing upload',
+        }
+      }
       return {
         success: false,
-        error: error.error || `HTTP ${response.status}`,
+        error: err instanceof Error ? err.message : 'Failed to complete upload',
       }
-    }
-
-    const result = await response.json()
-    return {
-      success: true,
-      mediaId: result.mediaId,
     }
   }
 

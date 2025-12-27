@@ -16,9 +16,11 @@ import {
   Image,
   Alert,
   ActivityIndicator,
+  Modal,
+  ScrollView,
 } from 'react-native'
 import { ScreenContainer, Card, Button, OfflineBanner } from '../../src/components'
-import { useEvaluationSession, type PhotoCapture } from '../../src/hooks'
+import { useEvaluationSession, useVoiceNote, formatDuration, type PhotoCapture } from '../../src/hooks'
 import { useIsOnline } from '../../src/contexts/OfflineContext'
 import { colors, spacing, typography, radii } from '../../src/theme'
 
@@ -140,12 +142,19 @@ function PhotoPromptCard({
 }
 
 export default function EvaluationScreen() {
-  const { sessionId } = useLocalSearchParams<{ sessionId: string }>()
+  const { sessionId, strategy: strategyParam } = useLocalSearchParams<{
+    sessionId: string
+    strategy?: string
+  }>()
   const router = useRouter()
   const isOnline = useIsOnline()
-  const [opportunityId] = useState(sessionId || 'test-opportunity')
+  const [hasStarted, setHasStarted] = useState(false)
 
-  const evaluation = useEvaluationSession(opportunityId, 'flip')
+  // Determine strategy from param or default to flip
+  const strategy = (strategyParam as 'flip' | 'brrrr' | 'wholesale') || 'flip'
+  const dealId = sessionId || ''
+
+  const evaluation = useEvaluationSession(dealId, strategy)
 
   const {
     state,
@@ -163,13 +172,22 @@ export default function EvaluationScreen() {
     startSession,
   } = evaluation
 
+  // Voice notes
+  const voiceNote = useVoiceNote()
+  const [showVoiceModal, setShowVoiceModal] = useState(false)
+
   // Auto-start session on mount
   useEffect(() => {
-    if (state.status === 'idle') {
-      // For now, just set status to active without API call
-      // In production, would call startSession()
+    if (state.status === 'idle' && !hasStarted && dealId) {
+      setHasStarted(true)
+      // Start session - will create a session record or use local mode if offline
+      if (isOnline) {
+        startSession().catch((err) => {
+          console.warn('Failed to start session, continuing in local mode:', err)
+        })
+      }
     }
-  }, [state.status])
+  }, [state.status, hasStarted, dealId, isOnline, startSession])
 
   const handleComplete = async () => {
     if (hasUnsyncedPhotos && !isOnline) {
@@ -200,11 +218,53 @@ export default function EvaluationScreen() {
     }
   }
 
+  // Strategy labels for display
+  const strategyLabels: Record<string, string> = {
+    flip: 'Flip',
+    brrrr: 'BRRRR',
+    wholesale: 'Wholesale',
+    hold: 'Buy & Hold',
+  }
+
+  // Loading state
+  if (state.status === 'loading') {
+    return (
+      <>
+        <Stack.Screen options={{ title: 'Evaluation', headerShown: true }} />
+        <ScreenContainer>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={colors.brand[500]} />
+            <Text style={styles.loadingText}>Starting evaluation session...</Text>
+          </View>
+        </ScreenContainer>
+      </>
+    )
+  }
+
+  // Error state
+  if (state.status === 'error') {
+    return (
+      <>
+        <Stack.Screen options={{ title: 'Evaluation', headerShown: true }} />
+        <ScreenContainer>
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorIcon}>⚠️</Text>
+            <Text style={styles.errorTitle}>Session Error</Text>
+            <Text style={styles.errorText}>{state.error || 'Could not start session'}</Text>
+            <Button variant="primary" onPress={() => router.back()}>
+              Go Back
+            </Button>
+          </View>
+        </ScreenContainer>
+      </>
+    )
+  }
+
   return (
     <>
       <Stack.Screen
         options={{
-          title: 'Evaluation',
+          title: `${strategyLabels[strategy] || 'Property'} Evaluation`,
           headerShown: true,
         }}
       />
@@ -274,15 +334,9 @@ export default function EvaluationScreen() {
           <Button
             variant="outline"
             style={styles.footerButton}
-            onPress={() => {
-              Alert.alert(
-                'Voice Note',
-                'Voice notes coming soon!',
-                [{ text: 'OK' }]
-              )
-            }}
+            onPress={() => setShowVoiceModal(true)}
           >
-            🎤 Voice Note
+            🎤 Voice Note {voiceNote.recordings.length > 0 && `(${voiceNote.recordings.length})`}
           </Button>
           <Button
             variant="primary"
@@ -297,12 +351,201 @@ export default function EvaluationScreen() {
             )}
           </Button>
         </View>
+
+        {/* Voice Note Modal */}
+        <Modal
+          visible={showVoiceModal}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setShowVoiceModal(false)}
+        >
+          <View style={styles.voiceModalContainer}>
+            <View style={styles.voiceModalHeader}>
+              <Text style={styles.voiceModalTitle}>Voice Notes</Text>
+              <TouchableOpacity onPress={() => setShowVoiceModal(false)}>
+                <Text style={styles.voiceModalClose}>Done</Text>
+              </TouchableOpacity>
+            </View>
+
+            {!voiceNote.isAvailable ? (
+              <View style={styles.voiceNotAvailable}>
+                <Text style={styles.voiceNotAvailableIcon}>🎤</Text>
+                <Text style={styles.voiceNotAvailableText}>
+                  Voice notes require expo-av
+                </Text>
+                <Text style={styles.voiceNotAvailableSubtext}>
+                  Run: npx expo install expo-av
+                </Text>
+              </View>
+            ) : (
+              <>
+                {/* Recording Controls */}
+                <View style={styles.voiceRecordingSection}>
+                  {voiceNote.isRecording ? (
+                    <View style={styles.voiceRecordingActive}>
+                      <View style={styles.voiceRecordingIndicator}>
+                        <View style={styles.voiceRecordingDot} />
+                        <Text style={styles.voiceRecordingTime}>
+                          {formatDuration(voiceNote.durationMs)}
+                        </Text>
+                      </View>
+                      <View style={styles.voiceRecordingButtons}>
+                        {voiceNote.isPaused ? (
+                          <TouchableOpacity
+                            style={styles.voiceControlButton}
+                            onPress={voiceNote.resumeRecording}
+                          >
+                            <Text style={styles.voiceControlIcon}>▶️</Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <TouchableOpacity
+                            style={styles.voiceControlButton}
+                            onPress={voiceNote.pauseRecording}
+                          >
+                            <Text style={styles.voiceControlIcon}>⏸️</Text>
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                          style={[styles.voiceControlButton, styles.voiceStopButton]}
+                          onPress={voiceNote.stopRecording}
+                        >
+                          <Text style={styles.voiceControlIcon}>⏹️</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.voiceControlButton}
+                          onPress={voiceNote.cancelRecording}
+                        >
+                          <Text style={styles.voiceControlIcon}>🗑️</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.voiceStartButton}
+                      onPress={voiceNote.startRecording}
+                    >
+                      <Text style={styles.voiceStartIcon}>🎙️</Text>
+                      <Text style={styles.voiceStartText}>Tap to Record</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Recordings List */}
+                <ScrollView style={styles.voiceRecordingsList}>
+                  <Text style={styles.voiceRecordingsTitle}>
+                    Recordings ({voiceNote.recordings.length})
+                  </Text>
+                  {voiceNote.recordings.length === 0 ? (
+                    <Text style={styles.voiceNoRecordings}>
+                      No voice notes yet. Tap the microphone to start.
+                    </Text>
+                  ) : (
+                    voiceNote.recordings.map((recording) => (
+                      <View key={recording.id} style={styles.voiceRecordingItem}>
+                        <View style={styles.voiceRecordingInfo}>
+                          <Text style={styles.voiceRecordingDuration}>
+                            {formatDuration(recording.durationMs)}
+                          </Text>
+                          <Text style={styles.voiceRecordingDate}>
+                            {new Date(recording.createdAt).toLocaleTimeString()}
+                          </Text>
+                        </View>
+                        <View style={styles.voiceRecordingActions}>
+                          {voiceNote.playingUri === recording.uri ? (
+                            <TouchableOpacity
+                              style={styles.voicePlayButton}
+                              onPress={voiceNote.stopPlayback}
+                            >
+                              <Text style={styles.voicePlayIcon}>⏹️</Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.voicePlayButton}
+                              onPress={() => voiceNote.playRecording(recording.uri)}
+                            >
+                              <Text style={styles.voicePlayIcon}>▶️</Text>
+                            </TouchableOpacity>
+                          )}
+                          {/* Transcribe Button */}
+                          <TouchableOpacity
+                            style={[
+                              styles.voiceTranscribeButton,
+                              recording.isTranscribing && styles.voiceTranscribeButtonActive,
+                            ]}
+                            onPress={() => voiceNote.transcribeRecording(recording.id)}
+                            disabled={recording.isTranscribing || !!recording.transcript}
+                          >
+                            {recording.isTranscribing ? (
+                              <ActivityIndicator size="small" color={colors.brand[500]} />
+                            ) : (
+                              <Text style={styles.voiceTranscribeIcon}>
+                                {recording.transcript ? '✓' : '📝'}
+                              </Text>
+                            )}
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.voiceDeleteButton}
+                            onPress={() => voiceNote.deleteRecording(recording.id)}
+                          >
+                            <Text style={styles.voiceDeleteIcon}>🗑️</Text>
+                          </TouchableOpacity>
+                        </View>
+                        {/* Transcript Display */}
+                        {recording.transcript && (
+                          <View style={styles.voiceTranscriptContainer}>
+                            <Text style={styles.voiceTranscriptLabel}>Transcript:</Text>
+                            <Text style={styles.voiceTranscriptText}>{recording.transcript}</Text>
+                          </View>
+                        )}
+                        {recording.transcriptError && (
+                          <Text style={styles.voiceTranscriptError}>{recording.transcriptError}</Text>
+                        )}
+                      </View>
+                    ))
+                  )}
+                </ScrollView>
+              </>
+            )}
+          </View>
+        </Modal>
       </ScreenContainer>
     </>
   )
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loadingText: {
+    marginTop: spacing.md,
+    fontSize: typography.fontSize.base,
+    color: colors.slate[500],
+  },
+  errorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  errorIcon: {
+    fontSize: 64,
+    marginBottom: spacing.md,
+  },
+  errorTitle: {
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    marginBottom: spacing.sm,
+  },
+  errorText: {
+    fontSize: typography.fontSize.base,
+    color: colors.slate[500],
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+  },
   progressHeader: {
     padding: spacing.md,
     backgroundColor: colors.white,
@@ -487,5 +730,227 @@ const styles = StyleSheet.create({
   },
   footerButtonPrimary: {
     flex: 2,
+  },
+
+  // Voice Note Modal Styles
+  voiceModalContainer: {
+    flex: 1,
+    backgroundColor: colors.white,
+  },
+  voiceModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: spacing.md,
+    paddingTop: spacing.xl,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.slate[100],
+  },
+  voiceModalTitle: {
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.ink,
+  },
+  voiceModalClose: {
+    fontSize: typography.fontSize.base,
+    color: colors.brand[600],
+    fontWeight: typography.fontWeight.medium,
+  },
+  voiceNotAvailable: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  voiceNotAvailableIcon: {
+    fontSize: 64,
+    marginBottom: spacing.md,
+  },
+  voiceNotAvailableText: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.ink,
+    marginBottom: spacing.sm,
+  },
+  voiceNotAvailableSubtext: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    fontFamily: 'monospace',
+    backgroundColor: colors.slate[100],
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+  },
+  voiceRecordingSection: {
+    padding: spacing.lg,
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.slate[100],
+  },
+  voiceStartButton: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: colors.brand[500],
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.brand[500],
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  voiceStartIcon: {
+    fontSize: 48,
+  },
+  voiceStartText: {
+    fontSize: typography.fontSize.xs,
+    color: colors.white,
+    marginTop: spacing.xs,
+    fontWeight: typography.fontWeight.medium,
+  },
+  voiceRecordingActive: {
+    alignItems: 'center',
+  },
+  voiceRecordingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  voiceRecordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.error[500],
+    marginRight: spacing.sm,
+  },
+  voiceRecordingTime: {
+    fontSize: typography.fontSize['2xl'],
+    fontWeight: typography.fontWeight.bold,
+    color: colors.ink,
+    fontVariant: ['tabular-nums'],
+  },
+  voiceRecordingButtons: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  voiceControlButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.slate[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceStopButton: {
+    backgroundColor: colors.error[100],
+  },
+  voiceControlIcon: {
+    fontSize: 24,
+  },
+  voiceRecordingsList: {
+    flex: 1,
+    padding: spacing.md,
+  },
+  voiceRecordingsTitle: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    marginBottom: spacing.md,
+  },
+  voiceNoRecordings: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    textAlign: 'center',
+    paddingVertical: spacing.xl,
+  },
+  voiceRecordingItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.slate[50],
+    padding: spacing.md,
+    borderRadius: radii.md,
+    marginBottom: spacing.sm,
+  },
+  voiceRecordingInfo: {
+    flex: 1,
+  },
+  voiceRecordingDuration: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.ink,
+  },
+  voiceRecordingDate: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+    marginTop: 2,
+  },
+  voiceRecordingActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  voicePlayButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.brand[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voicePlayIcon: {
+    fontSize: 18,
+  },
+  voiceDeleteButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.error[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceDeleteIcon: {
+    fontSize: 18,
+  },
+  // Transcription styles
+  voiceTranscribeButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.brand[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceTranscribeButtonActive: {
+    backgroundColor: colors.brand[100],
+  },
+  voiceTranscribeIcon: {
+    fontSize: 18,
+  },
+  voiceTranscriptContainer: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    backgroundColor: colors.slate[50],
+    borderRadius: radii.md,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.brand[400],
+  },
+  voiceTranscriptLabel: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.slate[500],
+    marginBottom: spacing.xs,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  voiceTranscriptText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.ink,
+    lineHeight: 20,
+  },
+  voiceTranscriptError: {
+    marginTop: spacing.xs,
+    fontSize: typography.fontSize.xs,
+    color: colors.error[500],
   },
 })

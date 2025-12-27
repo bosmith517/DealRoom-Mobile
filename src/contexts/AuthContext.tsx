@@ -59,14 +59,16 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 // Types
 interface Entitlement {
   app_key: string
-  is_active: boolean
-  features?: Record<string, boolean>
+  is_enabled: boolean
+  metadata?: Record<string, unknown>
 }
 
 interface AuthState {
   user: User | null
   session: Session | null
   tenantId: string | null
+  platforms: string[]
+  hasDealroomAccess: boolean
   entitlements: Entitlement[]
   isLoading: boolean
   isAuthenticated: boolean
@@ -94,40 +96,57 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [tenantId, setTenantId] = useState<string | null>(null)
+  const [platforms, setPlatforms] = useState<string[]>([])
   const [entitlements, setEntitlements] = useState<Entitlement[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
-  // Fetch user's tenant and entitlements
+  // Derived state: does user have DealRoom platform access?
+  const hasDealroomAccess = platforms.includes('dealroom')
+
+  // Fetch user's tenant, platforms, and entitlements
   const fetchUserData = useCallback(async (userId: string) => {
     try {
-      // Fetch user profile to get tenant_id
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('tenant_id')
-        .eq('id', userId)
+      // Fetch user's tenant and platform access from tenant_users
+      const { data: userTenant, error: tenantError } = await supabase
+        .from('tenant_users')
+        .select('tenant_id, platforms')
+        .eq('user_id', userId)
         .single()
 
-      if (profileError) {
-        console.error('Error fetching profile:', profileError)
+      if (tenantError) {
+        console.error('Error fetching tenant:', tenantError)
         return
       }
 
-      if (profile?.tenant_id) {
-        setTenantId(profile.tenant_id)
+      if (!userTenant?.tenant_id) {
+        console.error('No tenant found for user')
+        return
+      }
 
-        // Fetch entitlements for this tenant
-        const { data: entitlementData, error: entitlementError } = await supabase
-          .from('tenant_app_entitlements')
-          .select('app_key, is_active, features')
-          .eq('tenant_id', profile.tenant_id)
+      setTenantId(userTenant.tenant_id)
+      setPlatforms(userTenant.platforms || [])
 
-        if (entitlementError) {
-          console.error('Error fetching entitlements:', entitlementError)
-        } else {
-          setEntitlements(entitlementData || [])
-          // Cache entitlements in AsyncStorage (fire and forget)
-          AsyncStorage.setItem('@dealroom:cached_entitlements', JSON.stringify(entitlementData)).catch(() => {})
-        }
+      // Check if user has DealRoom platform access
+      const userPlatforms = userTenant.platforms || []
+      if (!userPlatforms.includes('dealroom')) {
+        console.log('User does not have DealRoom platform access')
+        // Still set empty entitlements so the app knows access check is complete
+        setEntitlements([])
+        return
+      }
+
+      // User has platform access, fetch entitlements for tier/feature info
+      const { data: entitlementData, error: entitlementError } = await supabase
+        .from('dealroom_tenant_entitlements')
+        .select('app_key, is_enabled, metadata')
+        .eq('tenant_id', userTenant.tenant_id)
+
+      if (entitlementError) {
+        console.error('Error fetching entitlements:', entitlementError)
+      } else {
+        setEntitlements(entitlementData || [])
+        // Cache entitlements in AsyncStorage (fire and forget)
+        AsyncStorage.setItem('@dealroom:cached_entitlements', JSON.stringify(entitlementData)).catch(() => {})
       }
     } catch (error) {
       console.error('Error fetching user data:', error)
@@ -158,6 +177,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           await fetchUserData(session.user.id)
         } else if (event === 'SIGNED_OUT') {
           setTenantId(null)
+          setPlatforms([])
           setEntitlements([])
           AsyncStorage.removeItem('@dealroom:cached_entitlements').catch(() => {})
         }
@@ -211,7 +231,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const hasEntitlement = useCallback(
     (appKey: string): boolean => {
       const entitlement = entitlements.find((e) => e.app_key === appKey)
-      return entitlement?.is_active ?? false
+      return entitlement?.is_enabled ?? false
     },
     [entitlements]
   )
@@ -220,6 +240,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
     user,
     session,
     tenantId,
+    platforms,
+    hasDealroomAccess,
     entitlements,
     isLoading,
     isAuthenticated: !!session,

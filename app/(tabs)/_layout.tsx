@@ -2,11 +2,15 @@
  * Tabs Layout
  *
  * Bottom tab navigator for main app screens.
+ * Includes a prominent "Driving" FAB in the center.
+ * Shows OfflineBanner when offline or syncing.
  */
 
-import { Tabs } from 'expo-router'
-import { View, StyleSheet, Text } from 'react-native'
-import { colors, components, typography } from '../../src/theme'
+import { Tabs, useRouter } from 'expo-router'
+import { View, StyleSheet, Text, TouchableOpacity, Platform } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { colors, components, typography, shadows } from '../../src/theme'
+import { OfflineBanner } from '../../src/components/OfflineBanner'
 
 // Tab icon component
 function TabIcon({
@@ -40,64 +44,105 @@ function TabIcon({
   )
 }
 
-export default function TabsLayout() {
+// Driving FAB component
+function DrivingFAB() {
+  const router = useRouter()
+
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarShowLabel: false,
-        tabBarActiveTintColor: colors.brand[500],
-        tabBarInactiveTintColor: colors.slate[400],
-      }}
+    <TouchableOpacity
+      style={styles.drivingFab}
+      onPress={() => router.push('/driving')}
+      activeOpacity={0.8}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Dashboard',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="📊" label="Dashboard" />
-          ),
+      <Text style={styles.drivingFabIcon}>🚗</Text>
+      <Text style={styles.drivingFabLabel}>Drive</Text>
+    </TouchableOpacity>
+  )
+}
+
+export default function TabsLayout() {
+  const insets = useSafeAreaInsets()
+
+  return (
+    <View style={styles.container}>
+      {/* Offline banner at top with safe area padding */}
+      <View style={{ paddingTop: insets.top }}>
+        <OfflineBanner />
+      </View>
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarStyle: styles.tabBar,
+          tabBarShowLabel: false,
+          tabBarActiveTintColor: colors.brand[500],
+          tabBarInactiveTintColor: colors.slate[400],
         }}
-      />
-      <Tabs.Screen
-        name="search"
-        options={{
-          title: 'Search',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="🔍" label="Search" />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="pipeline"
-        options={{
-          title: 'Pipeline',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="📋" label="Pipeline" />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ focused }) => (
-            <TabIcon focused={focused} icon="👤" label="Profile" />
-          ),
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'Dashboard',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon focused={focused} icon="📊" label="Dashboard" />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="leads"
+          options={{
+            title: 'Leads',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon focused={focused} icon="📍" label="Leads" />
+            ),
+          }}
+        />
+        {/* Placeholder for center FAB */}
+        <Tabs.Screen
+          name="driving-placeholder"
+          options={{
+            title: 'Drive',
+            tabBarButton: () => <DrivingFAB />,
+          }}
+          listeners={{
+            tabPress: (e) => {
+              // Prevent default behavior
+              e.preventDefault()
+            },
+          }}
+        />
+        <Tabs.Screen
+          name="pipeline"
+          options={{
+            title: 'Pipeline',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon focused={focused} icon="📋" label="Pipeline" />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="profile"
+          options={{
+            title: 'Profile',
+            tabBarIcon: ({ focused }) => (
+              <TabIcon focused={focused} icon="👤" label="Profile" />
+            ),
+          }}
+        />
+      </Tabs>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
   tabBar: {
     height: components.tabBar.height,
     backgroundColor: colors.white,
     borderTopWidth: 1,
     borderTopColor: colors.slate[100],
-    paddingBottom: 20,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 8,
     paddingTop: 8,
   },
   tabIconContainer: {
@@ -111,5 +156,24 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontSize: typography.fontSize.xs,
     fontWeight: typography.fontWeight.medium,
+  },
+  drivingFab: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.brand[500],
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: -24,
+    ...shadows.large,
+  },
+  drivingFabIcon: {
+    fontSize: 24,
+  },
+  drivingFabLabel: {
+    fontSize: 10,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.white,
+    marginTop: 2,
   },
 })

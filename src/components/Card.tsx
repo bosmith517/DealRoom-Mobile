@@ -4,8 +4,8 @@
  * Rounded container with shadow, matching web design system.
  */
 
-import React from 'react'
-import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native'
+import React, { forwardRef } from 'react'
+import { View, Pressable, StyleSheet, ViewStyle, StyleProp, GestureResponderEvent } from 'react-native'
 import { colors, radii, shadows, spacing } from '../theme'
 
 interface CardProps {
@@ -17,29 +17,54 @@ interface CardProps {
   shadow?: 'none' | 'soft' | 'softMd' | 'softLg'
   /** Border radius size */
   radius?: 'sm' | 'md' | 'lg' | 'xl'
+  /** Press handler (if provided, Card becomes pressable) */
+  onPress?: (event: GestureResponderEvent) => void
+  /** Active opacity when pressed */
+  activeOpacity?: number
 }
 
-export function Card({
-  children,
-  style,
-  padding = 'md',
-  shadow = 'soft',
-  radius = 'xl',
-}: CardProps) {
+export const Card = forwardRef<View, CardProps>(function Card(
+  {
+    children,
+    style,
+    padding = 'md',
+    shadow = 'soft',
+    radius = 'xl',
+    onPress,
+    activeOpacity = 0.7,
+  },
+  ref
+) {
+  const cardStyle = [
+    styles.base,
+    shadows[shadow],
+    { borderRadius: radii[radius] },
+    padding !== 'none' && { padding: paddingMap[padding] },
+    style,
+  ]
+
+  // If onPress is provided, use Pressable for touch handling
+  if (onPress) {
+    return (
+      <Pressable
+        ref={ref as any}
+        style={({ pressed }) => [
+          ...cardStyle,
+          pressed && { opacity: activeOpacity },
+        ]}
+        onPress={onPress}
+      >
+        {children}
+      </Pressable>
+    )
+  }
+
   return (
-    <View
-      style={[
-        styles.base,
-        shadows[shadow],
-        { borderRadius: radii[radius] },
-        padding !== 'none' && { padding: paddingMap[padding] },
-        style,
-      ]}
-    >
+    <View ref={ref} style={cardStyle}>
       {children}
     </View>
   )
-}
+})
 
 const paddingMap = {
   sm: spacing.sm + 4, // 12

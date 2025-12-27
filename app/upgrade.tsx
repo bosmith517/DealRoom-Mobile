@@ -13,11 +13,11 @@ export default function UpgradeScreen() {
   const { signOut, user } = useAuth()
 
   const handleContactSales = () => {
-    Linking.openURL('mailto:sales@tradeworkspro.com?subject=DealRoom%20Pro%20Inquiry')
+    Linking.openURL('mailto:support@tradeworksflow.com?subject=DealRoom%20Pro%20Inquiry')
   }
 
   const handleLearnMore = () => {
-    Linking.openURL('https://tradeworkspro.com/dealroom')
+    Linking.openURL('https://dealroom.tradeworksflow.com')
   }
 
   return (

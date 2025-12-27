@@ -88,7 +88,7 @@ export default function LoginScreen() {
   }
 
   const handleContactSales = () => {
-    Linking.openURL('mailto:sales@tradeworkspro.com?subject=DealRoom%20Access%20Request')
+    Linking.openURL('mailto:support@tradeworksflow.com?subject=DealRoom%20Access%20Request')
   }
 
   return (

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:developer.batchdata.com)",
+      "WebSearch",
+      "WebFetch(domain:api.developer.attomdata.com)",
+      "Bash(curl:*)",
+      "Bash(wc:*)",
+      "Bash(cd:*)",
+      "Bash(cat:*)"
+    ]
+  }
+}

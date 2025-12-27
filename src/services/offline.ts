@@ -48,7 +48,14 @@ export interface CachedDeal {
 
 export interface PendingMutation {
   id: string
-  type: 'evaluation_update' | 'note_create' | 'checklist_update'
+  type:
+    | 'evaluation_update'
+    | 'note_create'
+    | 'checklist_update'
+    | 'lead_update'
+    | 'deal_update'
+    | 'reach_transition'
+    | 'reach_interaction'
   payload: any
   createdAt: string
   retryCount: number

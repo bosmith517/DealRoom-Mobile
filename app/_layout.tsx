@@ -14,12 +14,14 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { AuthProvider, useAuth } from '../src/contexts/AuthContext'
 import { OfflineProvider } from '../src/contexts/OfflineContext'
+import { SettingsProvider } from '../src/contexts/SettingsContext'
+import { ThemeProvider, useTheme } from '../src/contexts/ThemeContext'
 import { colors } from '../src/theme'
-import { View, ActivityIndicator, StyleSheet } from 'react-native'
+import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native'
 
 // Auth navigation guard
 function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading, hasEntitlement } = useAuth()
+  const { isAuthenticated, isLoading, hasDealroomAccess, signOut } = useAuth()
   const segments = useSegments()
   const router = useRouter()
 
@@ -29,7 +31,7 @@ function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
     const seg0 = segments?.[0]
     const inAuthGroup = seg0 === '(auth)'
     const inPortal = seg0 === 'portal'
-    const inUpgrade = seg0 === 'upgrade'
+    const inNoAccess = seg0 === 'no-access'
 
     // Portal routes are public - no auth required
     if (inPortal) return
@@ -40,20 +42,15 @@ function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // Authenticated - check entitlement
-    // TODO: Re-enable when subscription flow is ready
-    // const entitled = hasEntitlement('dealroom')
-    const entitled = true // Bypass for development
-
-    if (!entitled) {
-      // Not entitled - force to upgrade from anywhere except upgrade
-      if (!inUpgrade) router.replace('/upgrade')
+    // Authenticated but no DealRoom platform access
+    if (!hasDealroomAccess) {
+      if (!inNoAccess) router.replace('/no-access')
       return
     }
 
-    // Entitled - redirect away from auth/upgrade screens
-    if (inAuthGroup || inUpgrade) router.replace('/(tabs)')
-  }, [isAuthenticated, isLoading, segments, router, hasEntitlement])
+    // Authenticated with access - redirect away from auth/no-access screens
+    if (inAuthGroup || inNoAccess) router.replace('/(tabs)')
+  }, [isAuthenticated, isLoading, hasDealroomAccess, segments, router])
 
   if (isLoading) {
     return (
@@ -72,9 +69,11 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <OfflineProvider>
-            <AuthNavigationGuard>
-              <StatusBar style="auto" />
+          <SettingsProvider>
+            <ThemeProvider>
+              <OfflineProvider>
+                <AuthNavigationGuard>
+                <StatusBar style="auto" />
               <Stack
               screenOptions={{
                 headerShown: false,
@@ -121,6 +120,39 @@ export default function RootLayout() {
                 }}
               />
 
+              {/* Comps screen */}
+              <Stack.Screen
+                name="property/comps"
+                options={{
+                  headerShown: true,
+                  title: 'Comparables',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Market Trends screen */}
+              <Stack.Screen
+                name="property/trends"
+                options={{
+                  headerShown: true,
+                  title: 'Market Trends',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Property Lookup screen (ATTOM view without deal) */}
+              <Stack.Screen
+                name="property-lookup/[attomId]"
+                options={{
+                  headerShown: true,
+                  title: 'Property Details',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
               {/* Upgrade screen */}
               <Stack.Screen
                 name="upgrade"
@@ -131,9 +163,19 @@ export default function RootLayout() {
                   headerTintColor: colors.white,
                 }}
               />
+
+              {/* No access screen (authenticated but no DealRoom platform access) */}
+              <Stack.Screen
+                name="no-access"
+                options={{
+                  headerShown: false,
+                }}
+              />
             </Stack>
-            </AuthNavigationGuard>
-          </OfflineProvider>
+                </AuthNavigationGuard>
+              </OfflineProvider>
+            </ThemeProvider>
+          </SettingsProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

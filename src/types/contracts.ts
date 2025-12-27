@@ -9,18 +9,18 @@
 // CORE MODELS
 // ============================================================================
 
+// Database stages from dealroom_deals table
 export type DealStage =
   | 'lead'
   | 'researching'
-  | 'contacted'
-  | 'negotiating'
-  | 'offer_sent'
+  | 'evaluating'
+  | 'analyzing'
+  | 'offer_pending'
   | 'under_contract'
   | 'due_diligence'
   | 'closing'
-  | 'closed_won'
-  | 'closed_lost'
-  | 'on_hold'
+  | 'closed'
+  | 'dead'
 
 export interface DealStageConfigItem {
   label: string
@@ -30,16 +30,15 @@ export interface DealStageConfigItem {
 
 export const DEAL_STAGE_CONFIG: Record<DealStage, DealStageConfigItem> = {
   lead: { label: 'Lead', color: '#94a3b8' },
-  researching: { label: 'Researching', color: '#3b82f6' },
-  contacted: { label: 'Contacted', color: '#8b5cf6' },
-  negotiating: { label: 'Negotiating', color: '#f59e0b' },
-  offer_sent: { label: 'Offer Sent', color: '#f97316' },
+  researching: { label: 'Researching', color: '#8b5cf6' },
+  evaluating: { label: 'Evaluating', color: '#6366f1' },
+  analyzing: { label: 'Analyzing', color: '#60a5fa' },
+  offer_pending: { label: 'Offer Pending', color: '#f59e0b' },
   under_contract: { label: 'Under Contract', color: '#22c55e' },
   due_diligence: { label: 'Due Diligence', color: '#14b8a6' },
-  closing: { label: 'Closing', color: '#06b6d4' },
-  closed_won: { label: 'Closed Won', color: '#10b981' },
-  closed_lost: { label: 'Closed Lost', color: '#ef4444' },
-  on_hold: { label: 'On Hold', color: '#6b7280' },
+  closing: { label: 'Closing', color: '#0891b2' },
+  closed: { label: 'Closed', color: '#06b6d4' },
+  dead: { label: 'Dead', color: '#ef4444' },
 }
 
 export type PropertyType =
@@ -199,4 +198,222 @@ export interface ApiError {
   code: string
   message: string
   details?: Record<string, unknown>
+}
+
+// ============================================================================
+// DATABASE MODELS
+// ============================================================================
+
+export interface Deal {
+  id: string
+  tenant_id: string
+  name: string
+  stage: DealStage
+  status: 'active' | 'on_hold' | 'closed' | 'dead'
+  exit_strategy?: 'flip' | 'brrrr' | 'wholesale' | 'hold' | 'subject_to' | 'lease_option' | 'other'
+  owner_user_id?: string
+  assigned_user_id?: string
+  stage_entered_at?: string
+  expected_close_date?: string
+  actual_close_date?: string
+  purchase_price?: number
+  arv?: number
+  rehab_budget?: number
+  expected_profit?: number
+  source?: string
+  lead_id?: string
+  notes?: string
+  metadata?: Record<string, any>
+  created_at: string
+  updated_at: string
+  // Joined fields
+  property?: Property
+}
+
+export interface Property {
+  id: string
+  tenant_id: string
+  deal_id?: string
+  address_line1: string
+  address_line2?: string
+  city: string
+  state: string
+  zip: string
+  county?: string
+  lat?: number
+  lng?: number
+  property_type: string
+  bedrooms?: number
+  bathrooms?: number
+  sqft?: number
+  lot_sqft?: number
+  year_built?: number
+  stories?: number
+  garage_spaces?: number
+  pool?: boolean
+  acquisition_source?: string
+  lead_list_name?: string
+  attom_cache_id?: string
+  attom_fetched_at?: string
+  street_view_url?: string
+  primary_photo_url?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Underwriting {
+  id: string
+  tenant_id: string
+  deal_id?: string
+  property_id?: string
+  snapshot_name?: string
+  as_of_date: string
+  asking_price?: number
+  offer_price?: number
+  purchase_price?: number
+  closing_costs?: number
+  arv: number
+  arv_confidence: 'low' | 'medium' | 'high'
+  rehab_budget: number
+  holding_months?: number
+  holding_cost_monthly?: number
+  exit_strategy: string
+  projected_sale_price?: number
+  selling_costs_percent?: number
+  total_investment?: number
+  projected_profit?: number
+  roi_percent?: number
+  max_allowable_offer?: number
+  equity_captured?: number
+  created_at: string
+  updated_at: string
+}
+
+export type RecurringPattern = 'none' | 'daily' | 'weekly' | 'biweekly' | 'monthly'
+
+export interface Followup {
+  id: string
+  tenant_id: string
+  deal_id?: string
+  property_id?: string
+  lead_id?: string
+  followup_type: string
+  title: string
+  description?: string
+  due_at: string
+  remind_at?: string
+  assigned_to?: string
+  status: 'open' | 'in_progress' | 'done' | 'snoozed' | 'cancelled'
+  completed_at?: string
+  outcome?: string
+  recurring_pattern?: RecurringPattern
+  parent_followup_id?: string
+  created_at: string
+  updated_at?: string
+}
+
+export interface DashboardStats {
+  totalDeals: number
+  activeDeals: number
+  pipelineValue: number
+  closedThisMonth: number
+  closedYTD: number
+  avgDaysToClose: number
+  dealsByStage: Record<DealStage, number>
+}
+
+export interface DealWithProperty extends Omit<Deal, 'property'> {
+  property: Property | null
+}
+
+// Lead from driving mode captures
+export interface Lead {
+  id: string
+  tenant_id: string
+  session_id?: string
+  address?: string
+  city?: string
+  state?: string
+  zip?: string
+  lat: number
+  lng: number
+  tags: string[]
+  priority: 'low' | 'normal' | 'high' | 'hot'
+  notes?: string
+  status: 'active' | 'converted' | 'archived' | 'deleted'
+  // Triage status for swipe queue
+  triage_status?: 'new' | 'queued' | 'dismissed' | 'watch' | 'deal_created'
+  triage_reason?: string
+  // Distress scoring
+  rank_score?: number
+  distress_signals?: string[]
+  last_scored_at?: string
+  // Photo from lead capture
+  photo_url?: string
+  // Ownership
+  created_by?: string
+  assigned_user_id?: string
+  converted_to_deal_id?: string
+  converted_at?: string
+  created_at: string
+  updated_at?: string
+}
+
+// Triage status types
+export type TriageStatus = 'new' | 'queued' | 'dismissed' | 'watch' | 'deal_created'
+export type SwipeDirection = 'left' | 'right' | 'up' | 'down'
+
+export interface SwipeAction {
+  direction: SwipeDirection
+  action_key: 'DISMISS' | 'QUEUE_ANALYSIS' | 'WATCH' | 'OUTREACH_QUEUE'
+  new_status: TriageStatus
+}
+
+// ============================================================================
+// SKIP TRACE TYPES
+// ============================================================================
+
+export interface SkipTracePhone {
+  phone: string
+  type: 'mobile' | 'landline' | 'voip' | 'unknown'
+  isValid: boolean
+  isPrimary: boolean
+  carrier?: string
+}
+
+export interface SkipTraceEmail {
+  email: string
+  type: 'personal' | 'work' | 'unknown'
+  isValid: boolean
+  isPrimary: boolean
+}
+
+export interface SkipTraceAddress {
+  street: string
+  city: string
+  state: string
+  zip: string
+  type?: 'current' | 'mailing' | 'previous'
+}
+
+export interface SkipTraceRelative {
+  fullName: string
+  relationship?: string
+  phones?: string[]
+}
+
+export type LitigatorRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+
+export interface SkipTraceLitigator {
+  isLitigator: boolean
+  score: number
+  riskLevel: LitigatorRiskLevel
+  caseCount?: number
+}
+
+export interface LeadWithSkipTrace extends Lead {
+  skip_trace_id?: string
+  skip_traced_at?: string
+  is_litigator?: boolean
+  litigator_warning?: string
 }
