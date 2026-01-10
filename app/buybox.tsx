@@ -27,6 +27,9 @@ import { Ionicons } from '@expo/vector-icons';
 import Slider from '@react-native-community/slider';
 import { colors, spacing, radii } from '../src/theme';
 import { getActiveBuyBox, createBuyBox, updateBuyBox, BuyBox } from '../src/services';
+import { BuyBoxTemplateSelector } from '../src/components/BuyBoxTemplateSelector';
+import { BuyBoxPreview } from '../src/components/BuyBoxPreview';
+import { aiService } from '../src/services/aiService';
 
 // Property types
 const PROPERTY_TYPES = [
@@ -226,6 +229,64 @@ export default function BuyBoxScreen() {
   const [saving, setSaving] = useState(false);
   const [existingId, setExistingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(initialFormState);
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false);
+  const [creatingFromTemplate, setCreatingFromTemplate] = useState(false);
+
+  // Handle template selection - create buy box from template via server
+  const handleTemplateSelect = async (templateId: string, customName?: string) => {
+    setCreatingFromTemplate(true);
+    try {
+      // Create buy box from template via server-side function
+      const newBuyBoxId = await aiService.createBuyBoxFromTemplate(templateId, customName);
+      if (newBuyBoxId) {
+        setShowTemplateSelector(false);
+        // Reload the buy box to get full data
+        setLoading(true);
+        const buyBox = await getActiveBuyBox();
+        if (buyBox) {
+          setExistingId(buyBox.id);
+          setForm({
+            name: buyBox.name || 'My Buy Box',
+            targetZips: (buyBox.target_zips || []).join(', '),
+            targetCities: (buyBox.target_cities || []).join(', '),
+            targetStates: (buyBox.target_states || []).join(', '),
+            excludeZips: (buyBox.exclude_zips || []).join(', '),
+            propertyTypes: buyBox.property_types || ['sfr'],
+            minBeds: buyBox.min_beds?.toString() || '',
+            maxBeds: buyBox.max_beds?.toString() || '',
+            minBaths: buyBox.min_baths?.toString() || '',
+            maxBaths: buyBox.max_baths?.toString() || '',
+            minSqft: buyBox.min_sqft?.toString() || '',
+            maxSqft: buyBox.max_sqft?.toString() || '',
+            minYearBuilt: buyBox.min_year_built?.toString() || '',
+            maxPurchasePrice: buyBox.max_purchase_price?.toString() || '',
+            minArv: buyBox.min_arv?.toString() || '',
+            maxRepairBudget: buyBox.max_repair_budget?.toString() || '',
+            minProfit: buyBox.min_profit?.toString() || '',
+            minRoiPercent: buyBox.min_roi_percent?.toString() || '',
+            strategies: buyBox.strategies || ['flip'],
+            preferredStrategy: buyBox.preferred_strategy || 'flip',
+            preferredTags: buyBox.preferred_tags || ['vacant', 'absentee_owner'],
+            avoidTags: buyBox.avoid_tags || [],
+            riskTolerance: buyBox.risk_tolerance || 'moderate',
+            weightLocation: buyBox.weight_location ?? 30,
+            weightPropertyFit: buyBox.weight_property_fit ?? 25,
+            weightFinancial: buyBox.weight_financial ?? 30,
+            weightDistress: buyBox.weight_distress ?? 15,
+          });
+        }
+        setLoading(false);
+        Alert.alert('Success', 'Buy box created from template. Customize as needed and save.');
+      } else {
+        Alert.alert('Error', 'Failed to create buy box from template.');
+      }
+    } catch (error) {
+      console.error('Error creating from template:', error);
+      Alert.alert('Error', 'Failed to create buy box from template.');
+    } finally {
+      setCreatingFromTemplate(false);
+    }
+  };
 
   // Load existing buy box
   useEffect(() => {
@@ -412,6 +473,16 @@ export default function BuyBoxScreen() {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Quick Start with Template */}
+        <Pressable
+          style={styles.templateButton}
+          onPress={() => setShowTemplateSelector(true)}
+        >
+          <Ionicons name="flash" size={18} color={colors.brand[600]} />
+          <Text style={styles.templateButtonText}>Start with a Template</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.slate[400]} />
+        </Pressable>
+
         {/* Name */}
         <Section title="Buy Box Name">
           <TextInput
@@ -680,8 +751,19 @@ export default function BuyBoxScreen() {
           />
         </Section>
 
+        {/* Preview Section */}
+        <BuyBoxPreview form={form} />
+
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Template Selector Modal */}
+      <BuyBoxTemplateSelector
+        visible={showTemplateSelector}
+        onCancel={() => setShowTemplateSelector(false)}
+        onSelectTemplate={handleTemplateSelect}
+        isLoading={creatingFromTemplate}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -898,5 +980,23 @@ const styles = StyleSheet.create({
   slider: {
     width: '100%',
     height: 40,
+  },
+  templateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brand[50],
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.brand[200],
+    borderStyle: 'dashed',
+  },
+  templateButtonText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.brand[700],
+    marginLeft: spacing.sm,
   },
 });

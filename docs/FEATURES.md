@@ -42,9 +42,9 @@ DealRoom is a **real estate investor mobile app** built with React Native/Expo, 
 | Triage | `app/triage.tsx` | Swipe triage queue |
 | Analyze | `app/analyze.tsx` | Analysis queue |
 | Buy Box | `app/buybox.tsx` | Investment criteria setup |
-| Upgrade | `app/upgrade.tsx` | Subscription management |
 | Search | `app/(tabs)/search.tsx` | Deal and property search |
 | Stakeholder Portal | `app/portal/[token].tsx` | Public token-based access for lenders/contractors |
+| Investor Onboarding | `src/components/InvestorOnboarding.tsx` | "Train The Mantis" profile wizard |
 
 ---
 
@@ -509,7 +509,81 @@ Public token-based access for external stakeholders without requiring authentica
 
 ---
 
-### 15. AI Analysis System
+### 15. Investor Onboarding ("Train The Mantis")
+
+**Screen:** `src/components/InvestorOnboarding.tsx`
+
+Multi-step wizard to collect investor profile information for personalized AI analysis. Uses FlipMantis branding with scrappy, investor-focused copy.
+
+**Steps (9 total):**
+
+| Step | Title | Subtitle | Purpose |
+|------|-------|----------|---------|
+| Welcome | Train The Mantis | - | Introduction with "Let's Go" CTA |
+| Experience | What's Your Deal Count? | No judgment—we all started somewhere | Experience level & strategies executed |
+| Financial | What's Your Firepower? | How much capital can you put to work? | Capital range & funding sources |
+| Goals | What's the Play? | What are you optimizing for right now? | Primary goal & investment strategies |
+| Time | How Much Bandwidth? | Hours per week you can dedicate to deals | Weekly hours & work style preference |
+| Risk | What's Your Risk Appetite? | Be honest—The Mantis won't show you stuff that'll stress you out | Risk tolerance & deal-breakers |
+| Team | Who's in Your Corner? | Check anyone you've got on speed dial | Team members & notes |
+| Market | Where Are You Hunting? | Your home turf and target zones | Home market, target ZIPs, remote investing |
+| Complete | The Mantis Is Ready | Time to hunt | Confirmation with buy box generation |
+
+**Experience Levels:**
+- Just Starting ("Learning the ropes")
+- Got Some Reps ("1-5 deals under my belt")
+- Been Around ("6-20 deals done")
+- Seasoned Pro ("20+ deals and counting")
+
+**Capital Ranges:**
+- Under $25K, $25K-$50K, $50K-$100K, $100K-$250K, $250K-$500K, $500K+
+
+**Funding Sources:**
+- Cash, Hard Money, Private Money, Conventional Loan, HELOC, Partners/JV, Seller Finance
+
+**Primary Goals:**
+- Quick Cash ("Flip it, wholesale it, move on")
+- Monthly Checks ("Build that rental income")
+- Long Game ("Stack equity over time")
+- Scale Up ("More doors, more deals")
+- Freedom Fund ("Replace the 9-5 eventually")
+
+**Work Styles:**
+- Hands-On ("I like being in the weeds")
+- Hybrid ("Some of both")
+- Delegator ("I oversee, others execute")
+
+**Risk Levels:**
+- Play It Safe ("Clean deals only. No surprises.")
+- Calculated Risks ("Some hair on it is fine.")
+- Swing Big ("If the numbers work, let's go.")
+
+**Risk Aversions (Deal-Breakers):**
+- Foundation Issues, Mold/Water Damage, Fire Damage, Structural Problems
+- Title Issues, HOA Properties, Flood Zones, High Crime Areas
+
+**Team Members:**
+- Contractor/GC ("Someone to swing hammers")
+- Real Estate Agent ("Boots on the ground")
+- Property Manager ("Handles the tenants")
+- Mentor/Coach ("Been there, done that")
+
+**Features:**
+- Progress bar with step indicators
+- Auto-saves progress at each step
+- Skip option ("I'll wing it for now")
+- Auto-generates Buy Boxes on completion based on profile
+- Loads existing profile if previously started
+
+**Completion Actions:**
+1. Marks `onboarding_complete = true`
+2. Records `onboarding_completed_at` timestamp
+3. Calls `generateBuyBoxesFromProfile()` to auto-create Buy Boxes
+4. Displays count of generated Buy Boxes
+
+---
+
+### 17. AI Analysis System
 
 Background AI processing for property scoring and analysis.
 
@@ -545,7 +619,7 @@ Background AI processing for property scoring and analysis.
 
 ---
 
-### 16. Distress Scoring System
+### 18. Distress Scoring System
 
 Automated scoring algorithm for property distress indicators.
 
@@ -856,7 +930,7 @@ type PropertyType = 'sfr' | 'multi_2_4' | 'condo' | 'townhouse' | 'land' | 'comm
 | Metric | Count |
 |--------|-------|
 | Total Screens | 18+ |
-| Core Features | 16 |
+| Core Features | 18 |
 | UI Components | 13+ |
 | Services | 7+ |
 | Custom Hooks | 4+ |

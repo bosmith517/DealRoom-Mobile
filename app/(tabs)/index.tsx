@@ -10,13 +10,17 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity, Alert } from 'react-native'
 import { Link, useRouter } from 'expo-router'
 import * as Location from 'expo-location'
-import { ScreenContainer, Card, Button } from '../../src/components'
+import { ScreenContainer, Card, Button, GoalTrackingWidget, WeekCalendarStrip, PipelineHealthGauge, QuickWinCard } from '../../src/components'
 import { colors, spacing, typography, shadows, radii } from '../../src/theme'
 import { useAuth } from '../../src/contexts/AuthContext'
-import { getDashboardStats, getRecentDeals, getLeads, getUpcomingFollowups, getOverdueFollowups } from '../../src/services'
+import { useSettings } from '../../src/contexts/SettingsContext'
+import { useFeatureGate } from '../../src/hooks/useFeatureGate'
+import { getDashboardStats, getRecentDeals, getLeads, getUpcomingFollowups, getOverdueFollowups, calendarService, getDailyFocus, getTimeBasedGreeting } from '../../src/services'
+import type { CalendarEvent } from '../../src/services/calendarService'
+import type { DailyFocus } from '../../src/services/dashboardService'
 import { supabase } from '../../src/lib/supabase'
 import { DEAL_STAGE_CONFIG } from '../../src/types'
 import type { DashboardStats, DealWithProperty, DealStage, Lead, Followup } from '../../src/types'
@@ -169,6 +173,38 @@ function getTimeAgo(dateString: string): string {
   return `${Math.floor(diffHours / 24)}d ago`
 }
 
+// Today Appointment Card
+function AppointmentCard({
+  event,
+  onPress,
+}: {
+  event: CalendarEvent
+  onPress: () => void
+}) {
+  const icon = calendarService.getEventTypeIcon(event.event_type)
+  const color = calendarService.getEventTypeColor(event.event_type)
+  const timeStr = calendarService.formatEventTime(event.start_time, event.end_time, event.all_day)
+
+  return (
+    <TouchableOpacity style={styles.appointmentCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={[styles.appointmentIcon, { backgroundColor: `${color}20` }]}>
+        <Text style={styles.appointmentIconText}>{icon}</Text>
+      </View>
+      <View style={styles.appointmentInfo}>
+        <Text style={styles.appointmentTitle} numberOfLines={1}>
+          {event.title}
+        </Text>
+        <Text style={styles.appointmentTime}>{timeStr}</Text>
+        {event.location && (
+          <Text style={styles.appointmentLocation} numberOfLines={1}>
+            📍 {event.location}
+          </Text>
+        )}
+      </View>
+    </TouchableOpacity>
+  )
+}
+
 // Empty State
 function EmptyState() {
   return (
@@ -188,11 +224,15 @@ function EmptyState() {
 
 export default function DashboardScreen() {
   const { user } = useAuth()
+  const { settings } = useSettings()
   const router = useRouter()
+  const { canTriage, canEvaluate } = useFeatureGate()
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [recentDeals, setRecentDeals] = useState<DealWithProperty[]>([])
   const [hotLeads, setHotLeads] = useState<Lead[]>([])
   const [overdueCount, setOverdueCount] = useState(0)
+  const [todayAppointments, setTodayAppointments] = useState<CalendarEvent[]>([])
+  const [dailyFocus, setDailyFocus] = useState<DailyFocus | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -202,11 +242,13 @@ export default function DashboardScreen() {
       setError(null)
 
       // Fetch all data in parallel
-      const [statsResult, dealsResult, leadsResult, overdueResult] = await Promise.all([
+      const [statsResult, dealsResult, leadsResult, overdueResult, appointmentsResult, dailyFocusResult] = await Promise.all([
         getDashboardStats(),
         getRecentDeals(5),
         getLeads({ limit: 10 }), // Recent unconverted leads
         getOverdueFollowups(),
+        calendarService.getTodayEvents(),
+        getDailyFocus(),
       ])
 
       if (statsResult.error) {
@@ -242,6 +284,18 @@ export default function DashboardScreen() {
         console.warn('Overdue error:', overdueResult.error)
       } else {
         setOverdueCount(overdueResult.data?.length || 0)
+      }
+
+      if (appointmentsResult.error) {
+        console.warn('Appointments error:', appointmentsResult.error)
+      } else {
+        setTodayAppointments(appointmentsResult.data || [])
+      }
+
+      if (dailyFocusResult.error) {
+        console.warn('Daily focus error:', dailyFocusResult.error)
+      } else {
+        setDailyFocus(dailyFocusResult.data)
       }
     } catch (err) {
       console.error('Dashboard fetch error:', err)
@@ -304,7 +358,7 @@ export default function DashboardScreen() {
     fetchData()
   }, [fetchData])
 
-  const userName = user?.email?.split('@')[0] || 'Investor'
+  const userName = settings.displayName || user?.email?.split('@')[0] || 'Investor'
 
   return (
     <ScreenContainer scrollable={false}>
@@ -319,18 +373,35 @@ export default function DashboardScreen() {
         }
         contentContainerStyle={{ paddingBottom: spacing.xl }}
       >
-        {/* Header */}
+        {/* Header with personalized greeting */}
         <View style={styles.header}>
-          <View>
-            <Text style={styles.greeting}>Welcome back,</Text>
-            <Text style={styles.userName}>{userName}</Text>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              style={styles.avatarButton}
+              onPress={() => router.push('/profile')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.avatarText}>
+                {userName[0]?.toUpperCase() || '?'}
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.greetingContainer}>
+              <Text style={styles.greeting}>{getTimeBasedGreeting()}, {userName}!</Text>
+              {dailyFocus?.greeting_context && (
+                <Text style={styles.greetingContext} numberOfLines={2}>
+                  {dailyFocus.greeting_context}
+                </Text>
+              )}
+            </View>
           </View>
           <View style={styles.headerActions}>
-            <Link href="/property/new" asChild>
-              <Button size="sm" variant="primary">
-                + New Deal
-              </Button>
-            </Link>
+            <TouchableOpacity
+              style={styles.headerIconButton}
+              onPress={() => router.push('/profile')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.headerIcon}>⚙️</Text>
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -382,9 +453,9 @@ export default function DashboardScreen() {
             </TouchableOpacity>
           </Link>
           <Link href="/property/new" asChild>
-            <TouchableOpacity style={[styles.primaryActionCard, styles.primaryActionBrand]} activeOpacity={0.7}>
-              <Text style={styles.primaryActionIcon}>➕</Text>
-              <Text style={[styles.primaryActionLabel, styles.primaryActionLabelLight]}>New Deal</Text>
+            <TouchableOpacity style={styles.primaryActionCard} activeOpacity={0.7}>
+              <Text style={styles.primaryActionIcon}>📝</Text>
+              <Text style={styles.primaryActionLabel}>New Deal</Text>
             </TouchableOpacity>
           </Link>
           <Link href="/search" asChild>
@@ -397,31 +468,87 @@ export default function DashboardScreen() {
 
         {/* Workflow Actions - Triage + Analyze */}
         <View style={styles.workflowActions}>
-          <Link href="/triage" asChild>
-            <TouchableOpacity style={styles.workflowCard} activeOpacity={0.7}>
-              <View style={[styles.workflowIcon, { backgroundColor: '#EF444420' }]}>
-                <Text style={styles.workflowIconText}>👆</Text>
-              </View>
-              <View style={styles.workflowInfo}>
-                <Text style={styles.workflowTitle}>Swipe Triage</Text>
-                <Text style={styles.workflowSubtext}>Tinder for properties</Text>
-              </View>
+          <TouchableOpacity
+            style={[styles.workflowCard, !canTriage && styles.workflowCardLocked]}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (canTriage) {
+                router.push('/triage')
+              } else {
+                Alert.alert(
+                  'Feature Not Available',
+                  'Swipe Triage is not included in your current plan. Contact support for assistance.'
+                )
+              }
+            }}
+          >
+            <View style={[styles.workflowIcon, { backgroundColor: '#EF444420' }]}>
+              <Text style={styles.workflowIconText}>👆</Text>
+            </View>
+            <View style={styles.workflowInfo}>
+              <Text style={styles.workflowTitle}>Swipe Triage</Text>
+              <Text style={styles.workflowSubtext}>Tinder for properties</Text>
+            </View>
+            {canTriage ? (
               <Text style={styles.workflowArrow}>→</Text>
-            </TouchableOpacity>
-          </Link>
-          <Link href="/analyze" asChild>
-            <TouchableOpacity style={styles.workflowCard} activeOpacity={0.7}>
-              <View style={[styles.workflowIcon, { backgroundColor: '#3B82F620' }]}>
-                <Text style={styles.workflowIconText}>📊</Text>
+            ) : (
+              <View style={styles.lockBadge}>
+                <Text style={styles.lockIcon}>🔒</Text>
               </View>
-              <View style={styles.workflowInfo}>
-                <Text style={styles.workflowTitle}>Analyze Queue</Text>
-                <Text style={styles.workflowSubtext}>Run quick underwriting</Text>
-              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.workflowCard, !canEvaluate && styles.workflowCardLocked]}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (canEvaluate) {
+                router.push('/analyze')
+              } else {
+                Alert.alert(
+                  'Feature Not Available',
+                  'Analyze Queue is not included in your current plan. Contact support for assistance.'
+                )
+              }
+            }}
+          >
+            <View style={[styles.workflowIcon, { backgroundColor: '#3B82F620' }]}>
+              <Text style={styles.workflowIconText}>📊</Text>
+            </View>
+            <View style={styles.workflowInfo}>
+              <Text style={styles.workflowTitle}>Analyze Queue</Text>
+              <Text style={styles.workflowSubtext}>Run quick underwriting</Text>
+            </View>
+            {canEvaluate ? (
               <Text style={styles.workflowArrow}>→</Text>
-            </TouchableOpacity>
-          </Link>
+            ) : (
+              <View style={styles.lockBadge}>
+                <Text style={styles.lockIcon}>🔒</Text>
+              </View>
+            )}
+          </TouchableOpacity>
         </View>
+
+        {/* Week Calendar Strip */}
+        <WeekCalendarStrip />
+
+        {/* Pipeline Health & Goals Row */}
+        <View style={styles.widgetsRow}>
+          <View style={styles.widgetHalf}>
+            <PipelineHealthGauge compact />
+          </View>
+        </View>
+
+        {/* Goal Tracking Widget */}
+        <GoalTrackingWidget
+          onAddGoal={() => {
+            // TODO: Navigate to goal creation modal
+            Alert.alert('Coming Soon', 'Goal creation will be available in the next update.')
+          }}
+        />
+
+        {/* Quick Win Suggestions */}
+        <QuickWinCard limit={3} />
 
         {/* Overdue Alert */}
         {overdueCount > 0 && (
@@ -439,6 +566,48 @@ export default function DashboardScreen() {
             </View>
             <Text style={styles.overdueArrow}>→</Text>
           </TouchableOpacity>
+        )}
+
+        {/* Today's Appointments */}
+        {todayAppointments.length > 0 && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>📅 Today's Schedule</Text>
+              <TouchableOpacity onPress={() => router.push('/calendar')}>
+                <Text style={styles.seeAll}>See All →</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.appointmentsList}>
+              {todayAppointments.slice(0, 3).map((event) => (
+                <AppointmentCard
+                  key={event.id}
+                  event={event}
+                  onPress={() => {
+                    // Navigate based on linked entity
+                    if (event.deal_id) {
+                      router.push(`/property/${event.deal_id}`)
+                    } else if (event.lead_id) {
+                      router.push(`/lead/${event.lead_id}`)
+                    } else if (event.contact_id) {
+                      router.push(`/contact/${event.contact_id}`)
+                    } else {
+                      router.push('/calendar')
+                    }
+                  }}
+                />
+              ))}
+              {todayAppointments.length > 3 && (
+                <TouchableOpacity
+                  style={styles.moreAppointments}
+                  onPress={() => router.push('/calendar')}
+                >
+                  <Text style={styles.moreAppointmentsText}>
+                    +{todayAppointments.length - 3} more appointment{todayAppointments.length - 3 !== 1 ? 's' : ''}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </>
         )}
 
         {/* Hot Leads (last 24h) */}
@@ -497,9 +666,36 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     marginTop: spacing.md,
   },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  avatarButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.brand[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.brand[600],
+  },
+  greetingContainer: {
+    flex: 1,
+  },
   greeting: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+  },
+  greetingContext: {
     fontSize: typography.fontSize.sm,
     color: colors.slate[500],
+    marginTop: 2,
   },
   userName: {
     fontSize: typography.fontSize['2xl'],
@@ -509,6 +705,17 @@ const styles = StyleSheet.create({
   headerActions: {
     flexDirection: 'row',
     gap: spacing.sm,
+  },
+  headerIconButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.slate[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIcon: {
+    fontSize: 18,
   },
   sectionTitle: {
     fontSize: typography.fontSize.lg,
@@ -588,6 +795,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginBottom: spacing.md,
   },
+  widgetsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  widgetHalf: {
+    flex: 1,
+  },
   workflowCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -623,6 +838,21 @@ const styles = StyleSheet.create({
   workflowArrow: {
     fontSize: typography.fontSize.xl,
     color: colors.slate[400],
+  },
+  workflowCardLocked: {
+    opacity: 0.7,
+    backgroundColor: colors.slate[50],
+  },
+  lockBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.slate[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockIcon: {
+    fontSize: 14,
   },
   overdueAlert: {
     flexDirection: 'row',
@@ -790,5 +1020,57 @@ const styles = StyleSheet.create({
     color: colors.error[700],
     fontSize: typography.fontSize.sm,
     flex: 1,
+  },
+  // Appointments
+  appointmentsList: {
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  appointmentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    ...shadows.soft,
+  },
+  appointmentIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.md,
+  },
+  appointmentIconText: {
+    fontSize: 20,
+  },
+  appointmentInfo: {
+    flex: 1,
+  },
+  appointmentTitle: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    marginBottom: 2,
+  },
+  appointmentTime: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[600],
+    fontWeight: typography.fontWeight.medium,
+  },
+  appointmentLocation: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+    marginTop: 2,
+  },
+  moreAppointments: {
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+  },
+  moreAppointmentsText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[600],
+    fontWeight: typography.fontWeight.medium,
   },
 })

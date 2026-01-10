@@ -6,9 +6,15 @@
   "build": {
     "preview": {
       "distribution": "internal",
+      "env": {
+        "APP_VARIANT": "preview"
+      },
       "ios": {
         "simulator": false,
         "buildConfiguration": "Release"
+      },
+      "android": {
+        "buildType": "apk"
       },
       "cache": {
         "disabled": true
@@ -21,10 +27,34 @@
       }
     },
     "production": {
-      "autoIncrement": true
+      "channel": "production",
+      "autoIncrement": true,
+      "cache": {
+        "disabled": true
+      },
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "buildConfiguration": "Release",
+        "env": {
+          "ENABLE_BITCODE": "NO"
+        }
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "sherrod0517@icloud.com",
+        "ascAppId": "6757320810",
+        "appleTeamId": "426N4WV4U2"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./google-play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "draft"
+      }
+    }
   }
 }

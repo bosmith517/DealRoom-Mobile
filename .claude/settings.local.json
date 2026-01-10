@@ -7,7 +7,16 @@
       "Bash(curl:*)",
       "Bash(wc:*)",
       "Bash(cd:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "WebFetch(domain:docs.stripe.com)",
+      "Bash(grep:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx supabase:*)",
+      "Bash(echo \"\" echo \"1. src/types/ai.ts\" echo \" Used by:\" grep -rl \"from.*types/ai\" --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(echo \"\" echo \"1. src/types/ai.ts - AI type definitions\" grep -rl \"types/ai\" --include=\"*.ts\" --include=\"*.tsx\")",
+      "Bash(npx expo install:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

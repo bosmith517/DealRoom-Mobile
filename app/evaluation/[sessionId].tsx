@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router'
+import { useFeatureGate } from '../../src/hooks/useFeatureGate'
 import {
   View,
   Text,
@@ -147,8 +148,19 @@ export default function EvaluationScreen() {
     strategy?: string
   }>()
   const router = useRouter()
+  const { canEvaluate, isLoading: featureLoading } = useFeatureGate()
   const isOnline = useIsOnline()
   const [hasStarted, setHasStarted] = useState(false)
+
+  // Feature gate - Evaluations require Starter tier or higher
+  if (!featureLoading && !canEvaluate) {
+    Alert.alert(
+      'Feature Not Available',
+      'Evaluations are not included in your current plan. Contact support for assistance.',
+      [{ text: 'OK', onPress: () => router.back() }]
+    )
+    return null
+  }
 
   // Determine strategy from param or default to flip
   const strategy = (strategyParam as 'flip' | 'brrrr' | 'wholesale') || 'flip'

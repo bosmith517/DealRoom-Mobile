@@ -110,7 +110,7 @@ export function useLocation(options: UseLocationOptions = {}): UseLocationReturn
         setError('Location permission denied')
         Alert.alert(
           'Location Required',
-          'DealRoom needs location access to track your driving route and tag properties. Please enable location in Settings.',
+          'FlipMantis needs location access to track your driving route and tag properties. Please enable location in Settings.',
           [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Open Settings', onPress: () => Linking.openSettings() },
@@ -217,81 +217,95 @@ export function useLocation(options: UseLocationOptions = {}): UseLocationReturn
       setIsTracking(true)
       setError(null)
 
-      // PROGRESSIVE ACCURACY: Get quick position first, then upgrade
-      // Phase 1: Get BALANCED accuracy quickly (with 10s timeout)
+      // PROGRESSIVE ACCURACY: Instant response (< 3s total blocking) -> High accuracy upgrade
+      // Phase 1: Get LAST KNOWN position IMMEDIATELY (sub-second response)
+      // Using maxAge and requiredAccuracy for explicit control
       try {
-        console.log('[Location] Fetching initial position (Balanced accuracy)...')
+        console.log('[Location] Phase 1: Getting last known position...')
+        const lastKnown = await Location.getLastKnownPositionAsync({
+          maxAge: 60000, // Accept positions up to 1 minute old
+          requiredAccuracy: 100, // Accept up to 100m accuracy
+        })
+        if (lastKnown) {
+          const ageSeconds = (Date.now() - lastKnown.timestamp) / 1000
+          initialCoords = {
+            lat: lastKnown.coords.latitude,
+            lng: lastKnown.coords.longitude,
+            accuracy: lastKnown.coords.accuracy,
+            altitude: lastKnown.coords.altitude,
+            heading: lastKnown.coords.heading,
+            speed: lastKnown.coords.speed,
+            timestamp: lastKnown.timestamp,
+          }
+          setLocation(initialCoords)
+          console.log('[Location] Phase 1 SUCCESS: Cached position:', initialCoords.lat.toFixed(5), initialCoords.lng.toFixed(5), 'accuracy:', initialCoords.accuracy, 'm, age:', Math.round(ageSeconds), 's')
+        } else {
+          console.log('[Location] Phase 1: No cached position available')
+        }
+      } catch (lastKnownErr) {
+        console.log('[Location] Phase 1 skipped: No cached position')
+      }
 
-        // Use Promise.race for timeout
-        const timeoutPromise = new Promise<null>((_, reject) =>
-          setTimeout(() => reject(new Error('Initial position timeout')), 10000)
+      // Phase 2: Get BALANCED accuracy (3s timeout) - fast fresh GPS
+      try {
+        console.log('[Location] Phase 2: Fetching balanced position (3s timeout)...')
+
+        const balancedTimeoutPromise = new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error('Balanced position timeout')), 3000)
         )
 
-        const positionPromise = Location.getCurrentPositionAsync({
+        const balancedPositionPromise = Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         })
 
-        const initial = await Promise.race([positionPromise, timeoutPromise]) as Location.LocationObject
+        const balancedResult = await Promise.race([balancedPositionPromise, balancedTimeoutPromise]) as Location.LocationObject
 
-        if (initial) {
-          initialCoords = {
-            lat: initial.coords.latitude,
-            lng: initial.coords.longitude,
-            accuracy: initial.coords.accuracy,
-            altitude: initial.coords.altitude,
-            heading: initial.coords.heading,
-            speed: initial.coords.speed,
-            timestamp: initial.timestamp,
+        if (balancedResult) {
+          const balancedCoords: LocationCoords = {
+            lat: balancedResult.coords.latitude,
+            lng: balancedResult.coords.longitude,
+            accuracy: balancedResult.coords.accuracy,
+            altitude: balancedResult.coords.altitude,
+            heading: balancedResult.coords.heading,
+            speed: balancedResult.coords.speed,
+            timestamp: balancedResult.timestamp,
           }
-          setLocation(initialCoords)
-          console.log('[Location] Initial position acquired (Balanced):', initialCoords.lat, initialCoords.lng, 'accuracy:', initialCoords.accuracy)
-
-          // Phase 2: Try to upgrade to HIGH accuracy in background (non-blocking)
-          if (opts.enableHighAccuracy) {
-            Location.getCurrentPositionAsync({
-              accuracy: Location.Accuracy.High,
-            }).then((highAccuracyResult) => {
-              // Only update if high accuracy is actually better
-              if (highAccuracyResult.coords.accuracy !== null &&
-                  (initialCoords?.accuracy === null || highAccuracyResult.coords.accuracy < initialCoords.accuracy)) {
-                const highCoords: LocationCoords = {
-                  lat: highAccuracyResult.coords.latitude,
-                  lng: highAccuracyResult.coords.longitude,
-                  accuracy: highAccuracyResult.coords.accuracy,
-                  altitude: highAccuracyResult.coords.altitude,
-                  heading: highAccuracyResult.coords.heading,
-                  speed: highAccuracyResult.coords.speed,
-                  timestamp: highAccuracyResult.timestamp,
-                }
-                setLocation(highCoords)
-                console.log('[Location] Upgraded to high accuracy:', highCoords.accuracy, 'm')
-              }
-            }).catch((err) => {
-              console.log('[Location] High accuracy upgrade skipped:', err.message)
-            })
-          }
-        }
-      } catch (initialErr: any) {
-        console.warn('[Location] Failed to get initial position:', initialErr.message)
-        // Try last known location as fallback
-        try {
-          const lastKnown = await Location.getLastKnownPositionAsync()
-          if (lastKnown) {
-            initialCoords = {
-              lat: lastKnown.coords.latitude,
-              lng: lastKnown.coords.longitude,
-              accuracy: lastKnown.coords.accuracy,
-              altitude: lastKnown.coords.altitude,
-              heading: lastKnown.coords.heading,
-              speed: lastKnown.coords.speed,
-              timestamp: lastKnown.timestamp,
-            }
+          // Only update if better accuracy than cached
+          if (!initialCoords || (balancedCoords.accuracy !== null && (initialCoords.accuracy === null || balancedCoords.accuracy < initialCoords.accuracy))) {
+            initialCoords = balancedCoords
             setLocation(initialCoords)
-            console.log('[Location] Using last known position:', initialCoords.lat, initialCoords.lng)
+            console.log('[Location] Phase 2 SUCCESS: Balanced position:', initialCoords.lat.toFixed(5), initialCoords.lng.toFixed(5), 'accuracy:', initialCoords.accuracy, 'm')
+          } else {
+            console.log('[Location] Phase 2: Balanced position not better than cached')
           }
-        } catch (lastErr) {
-          console.warn('[Location] No last known position available')
         }
+      } catch (balancedErr: any) {
+        console.log('[Location] Phase 2 timeout/error:', balancedErr.message, '- continuing with cached position')
+      }
+
+      // Phase 3: Try to upgrade to HIGH accuracy in background (non-blocking)
+      if (opts.enableHighAccuracy) {
+        Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        }).then((highAccuracyResult) => {
+          // Only update if high accuracy is actually better
+          if (highAccuracyResult.coords.accuracy !== null &&
+              (initialCoords === null || initialCoords?.accuracy === null || highAccuracyResult.coords.accuracy < initialCoords.accuracy)) {
+            const highCoords: LocationCoords = {
+              lat: highAccuracyResult.coords.latitude,
+              lng: highAccuracyResult.coords.longitude,
+              accuracy: highAccuracyResult.coords.accuracy,
+              altitude: highAccuracyResult.coords.altitude,
+              heading: highAccuracyResult.coords.heading,
+              speed: highAccuracyResult.coords.speed,
+              timestamp: highAccuracyResult.timestamp,
+            }
+            setLocation(highCoords)
+            console.log('[Location] Upgraded to high accuracy:', highCoords.accuracy, 'm')
+          }
+        }).catch((err) => {
+          console.log('[Location] High accuracy upgrade skipped:', err.message)
+        })
       }
 
       watchSubscription.current = await Location.watchPositionAsync(

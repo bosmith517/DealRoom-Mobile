@@ -20,16 +20,45 @@ import {
   Pressable,
   ActivityIndicator,
   SafeAreaView,
-  Vibration,
+  ScrollView,
+  Alert,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { colors, spacing, radii } from '../src/theme';
-import { getTriageLeads, handleSwipeAction, TriageLead } from '../src/services';
+import {
+  getTriageLeads,
+  getTriageChannelCounts,
+  handleSwipeAction,
+  undoSwipeAction,
+  TriageLead,
+  TriageChannel,
+  TriageChannelCount,
+} from '../src/services';
+import { useFeatureGate } from '../src/hooks/useFeatureGate';
+import { SwipeTutorial, shouldShowTutorial } from '../src/components/SwipeTutorial';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = 120;
 const SWIPE_OUT_DURATION = 250;
+
+// Helper to get source display info
+const getSourceDisplay = (source?: string): { icon: string; label: string; color: string } => {
+  switch (source) {
+    case 'driving':
+      return { icon: '🚗', label: 'Driving', color: colors.brand[600] };
+    case 'list_import':
+    case 'list':
+      return { icon: '📋', label: 'List', color: '#8B5CF6' };
+    case 'distress_alert':
+    case 'alert':
+      return { icon: '🚨', label: 'Alert', color: '#EF4444' };
+    case 'manual':
+    default:
+      return { icon: '✏️', label: 'Manual', color: colors.slate[500] };
+  }
+};
 
 // Swipe action colors
 const SWIPE_COLORS = {
@@ -52,23 +81,43 @@ interface SwipeCardProps {
   lead: TriageLead;
   isFirst: boolean;
   onSwipe: (direction: 'left' | 'right' | 'up' | 'down', reason?: string) => void;
-  onDismissReasonRequired: () => void;
+  onTap: () => void;
 }
 
-function SwipeCard({ lead, isFirst, onSwipe, onDismissReasonRequired }: SwipeCardProps) {
+function SwipeCard({ lead, isFirst, onSwipe, onTap }: SwipeCardProps) {
   const position = useRef(new Animated.ValueXY()).current;
   const [showDismissReasons, setShowDismissReasons] = useState(false);
 
+  // Use a ref to track the current isFirst value so the PanResponder always has access to it
+  const isFirstRef = useRef(isFirst);
+  useEffect(() => {
+    isFirstRef.current = isFirst;
+  }, [isFirst]);
+
+  // Track tap vs swipe
+  const gestureStartTime = useRef(0);
+  const TAP_THRESHOLD = 10; // Max movement for a tap
+  const TAP_DURATION = 200; // Max duration for a tap in ms
+
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => isFirst,
+      onStartShouldSetPanResponder: () => isFirstRef.current,
+      onPanResponderGrant: () => {
+        gestureStartTime.current = Date.now();
+      },
       onPanResponderMove: (_, gesture) => {
         position.setValue({ x: gesture.dx, y: gesture.dy });
       },
       onPanResponderRelease: (_, gesture) => {
-        // Determine swipe direction
+        const gestureDuration = Date.now() - gestureStartTime.current;
         const absX = Math.abs(gesture.dx);
         const absY = Math.abs(gesture.dy);
+
+        // Check if it's a tap (minimal movement, short duration)
+        if (absX < TAP_THRESHOLD && absY < TAP_THRESHOLD && gestureDuration < TAP_DURATION) {
+          onTap();
+          return;
+        }
 
         if (absX > absY && absX > SWIPE_THRESHOLD) {
           // Horizontal swipe
@@ -102,7 +151,7 @@ function SwipeCard({ lead, isFirst, onSwipe, onDismissReasonRequired }: SwipeCar
     const x = direction === 'left' ? -SCREEN_WIDTH * 1.5 : direction === 'right' ? SCREEN_WIDTH * 1.5 : 0;
     const y = direction === 'up' ? -SCREEN_HEIGHT : direction === 'down' ? SCREEN_HEIGHT : 0;
 
-    Vibration.vibrate([0, 30]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     Animated.timing(position, {
       toValue: { x, y },
@@ -159,6 +208,7 @@ function SwipeCard({ lead, isFirst, onSwipe, onDismissReasonRequired }: SwipeCar
 
   const distressScore = lead.rank_score || 0;
   const distressReasons = lead.distress_signals || [];
+  const sourceInfo = getSourceDisplay((lead as any).source);
 
   return (
     <Animated.View
@@ -205,6 +255,12 @@ function SwipeCard({ lead, isFirst, onSwipe, onDismissReasonRequired }: SwipeCar
                 '#10B981'
           }]}>
             <Text style={styles.scoreText}>{Math.round(distressScore)}</Text>
+          </View>
+
+          {/* Source badge */}
+          <View style={[styles.sourceBadge, { backgroundColor: sourceInfo.color }]}>
+            <Text style={styles.sourceBadgeIcon}>{sourceInfo.icon}</Text>
+            <Text style={styles.sourceBadgeText}>{sourceInfo.label}</Text>
           </View>
         </View>
 
@@ -293,34 +349,184 @@ function formatTimeAgo(dateString: string): string {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+// Undo state type
+interface UndoState {
+  lead: TriageLead;
+  direction: 'left' | 'right' | 'up' | 'down';
+  reason?: string;
+  previousState: {
+    triage_status: string;
+    priority: string;
+    dismiss_reason?: string | null;
+  };
+}
+
+// Constants
+const UNDO_TIMEOUT = 5000; // 5 seconds to undo
+const PREFETCH_THRESHOLD = 10; // Fetch more when <= 10 leads remain
+
 export default function TriageScreen() {
   const router = useRouter();
+  const { canTriage, isLoading: featureLoading } = useFeatureGate();
   const [leads, setLeads] = useState<TriageLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [stats, setStats] = useState({ kept: 0, passed: 0, watched: 0 });
+  const [selectedChannel, setSelectedChannel] = useState<TriageChannel>('all');
+  const [channelCounts, setChannelCounts] = useState<TriageChannelCount[]>([]);
 
-  const fetchLeads = useCallback(async () => {
-    setLoading(true);
+  // Undo state
+  const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const undoTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Pass button dismiss modal state
+  const [showPassModal, setShowPassModal] = useState(false);
+
+  // Pre-fetch tracking
+  const [isFetching, setIsFetching] = useState(false);
+  const totalLeadsRef = useRef(0);
+
+  // Tutorial state
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // Batch mode state
+  const [isBatchMode, setIsBatchMode] = useState(false);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+
+  // Feature gate - Swipe Triage requires Starter tier or higher
+  useEffect(() => {
+    if (!featureLoading && !canTriage) {
+      Alert.alert(
+        'Feature Not Available',
+        'Swipe Triage is not included in your current plan. Contact support for assistance.',
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
+    }
+  }, [featureLoading, canTriage, router]);
+
+  if (!featureLoading && !canTriage) {
+    return null;
+  }
+
+  const fetchChannelCounts = useCallback(async () => {
     try {
-      const data = await getTriageLeads({ limit: 50 });
-      setLeads(data);
+      const counts = await getTriageChannelCounts();
+      setChannelCounts(counts);
+    } catch (error) {
+      console.error('Error fetching channel counts:', error);
+    }
+  }, []);
+
+  const fetchLeads = useCallback(async (channel: TriageChannel = selectedChannel, append = false) => {
+    if (!append) setLoading(true);
+    setIsFetching(true);
+    try {
+      const data = await getTriageLeads({ limit: 50, channel });
+      if (append) {
+        // Append new leads, filtering out duplicates
+        setLeads((prev) => {
+          const existingIds = new Set(prev.map((l) => l.id));
+          const newLeads = data.filter((l) => !existingIds.has(l.id));
+          return [...prev, ...newLeads];
+        });
+      } else {
+        setLeads(data);
+        totalLeadsRef.current = data.length;
+      }
     } catch (error) {
       console.error('Error fetching triage leads:', error);
     } finally {
       setLoading(false);
+      setIsFetching(false);
     }
-  }, []);
+  }, [selectedChannel]);
+
+  const handleChannelChange = (channel: TriageChannel) => {
+    Haptics.selectionAsync();
+    setSelectedChannel(channel);
+    setStats({ kept: 0, passed: 0, watched: 0 }); // Reset stats for new channel
+    fetchLeads(channel);
+  };
 
   useEffect(() => {
     fetchLeads();
-  }, [fetchLeads]);
+    fetchChannelCounts();
+
+    // Check if we should show the tutorial
+    shouldShowTutorial().then((shouldShow) => {
+      if (shouldShow) {
+        setShowTutorial(true);
+      }
+    });
+  }, []);
+
+  // Pre-fetch when running low on leads
+  useEffect(() => {
+    if (leads.length > 0 && leads.length <= PREFETCH_THRESHOLD && !isFetching && !loading) {
+      console.log(`Pre-fetching more leads (${leads.length} remaining)`);
+      fetchLeads(selectedChannel, true);
+    }
+  }, [leads.length, isFetching, loading, selectedChannel, fetchLeads]);
+
+  // Clear undo timer on unmount
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) {
+        clearTimeout(undoTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Refresh counts after each swipe
+  const refreshCounts = useCallback(() => {
+    fetchChannelCounts();
+  }, [fetchChannelCounts]);
+
+  // Handle undo action
+  const handleUndo = useCallback(async () => {
+    if (!undoState) return;
+
+    // Clear the timer
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    // Restore the lead to the front of the deck
+    setLeads((prev) => [undoState.lead, ...prev]);
+
+    // Revert stats
+    setStats((prev) => ({
+      kept: prev.kept - (undoState.direction === 'right' || undoState.direction === 'down' ? 1 : 0),
+      passed: prev.passed - (undoState.direction === 'left' ? 1 : 0),
+      watched: prev.watched - (undoState.direction === 'up' ? 1 : 0),
+    }));
+
+    // Restore in database
+    try {
+      await undoSwipeAction(undoState.lead.id, undoState.previousState);
+      refreshCounts();
+    } catch (error) {
+      console.error('Error undoing swipe:', error);
+    }
+
+    setUndoState(null);
+  }, [undoState, refreshCounts]);
 
   const handleSwipe = async (direction: 'left' | 'right' | 'up' | 'down', reason?: string) => {
     if (leads.length === 0) return;
 
     const currentLead = leads[0];
     setProcessing(true);
+
+    // Store previous state for undo
+    const previousState = {
+      triage_status: (currentLead as any).triage_status || 'new',
+      priority: (currentLead as any).priority || 'normal',
+      dismiss_reason: (currentLead as any).dismiss_reason || null,
+    };
 
     try {
       await handleSwipeAction(currentLead.id, direction, reason);
@@ -334,6 +540,20 @@ export default function TriageScreen() {
 
       // Remove card from deck
       setLeads((prev) => prev.slice(1));
+
+      // Store undo state
+      if (undoTimerRef.current) {
+        clearTimeout(undoTimerRef.current);
+      }
+      setUndoState({ lead: currentLead, direction, reason, previousState });
+
+      // Auto-clear undo after timeout
+      undoTimerRef.current = setTimeout(() => {
+        setUndoState(null);
+      }, UNDO_TIMEOUT);
+
+      // Refresh channel counts in background
+      refreshCounts();
     } catch (error) {
       console.error('Error handling swipe:', error);
     } finally {
@@ -343,7 +563,95 @@ export default function TriageScreen() {
 
   const handleButtonSwipe = (direction: 'left' | 'right' | 'up' | 'down') => {
     if (leads.length === 0) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    // For left (pass) button, show dismiss reason modal
+    if (direction === 'left') {
+      setShowPassModal(true);
+      return;
+    }
+
     handleSwipe(direction);
+  };
+
+  // Handle pass button dismiss reason selection
+  const handlePassButtonReason = (reason: string) => {
+    setShowPassModal(false);
+    handleSwipe('left', reason);
+  };
+
+  // Navigate to lead detail
+  const handleCardTap = (lead: TriageLead) => {
+    Haptics.selectionAsync();
+    router.push(`/lead/${lead.id}`);
+  };
+
+  // Batch mode handlers
+  const toggleBatchMode = () => {
+    Haptics.selectionAsync();
+    setIsBatchMode(!isBatchMode);
+    setSelectedLeadIds(new Set()); // Clear selections when toggling
+  };
+
+  const toggleLeadSelection = (leadId: string) => {
+    Haptics.selectionAsync();
+    setSelectedLeadIds((prev) => {
+      const updated = new Set(prev);
+      if (updated.has(leadId)) {
+        updated.delete(leadId);
+      } else {
+        updated.add(leadId);
+      }
+      return updated;
+    });
+  };
+
+  const selectAllLeads = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedLeadIds(new Set(leads.map((l) => l.id)));
+  };
+
+  const deselectAllLeads = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSelectedLeadIds(new Set());
+  };
+
+  const handleBatchAction = async (direction: 'left' | 'right' | 'up' | 'down', reason?: string) => {
+    if (selectedLeadIds.size === 0) return;
+
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setProcessing(true);
+
+    const selectedIds = Array.from(selectedLeadIds);
+
+    try {
+      // Process all selected leads
+      for (const leadId of selectedIds) {
+        await handleSwipeAction(leadId, direction, reason);
+      }
+
+      // Update stats based on action
+      const count = selectedIds.length;
+      setStats((prev) => ({
+        kept: prev.kept + (direction === 'right' || direction === 'down' ? count : 0),
+        passed: prev.passed + (direction === 'left' ? count : 0),
+        watched: prev.watched + (direction === 'up' ? count : 0),
+      }));
+
+      // Remove processed leads from deck
+      setLeads((prev) => prev.filter((l) => !selectedLeadIds.has(l.id)));
+
+      // Clear selections and exit batch mode
+      setSelectedLeadIds(new Set());
+      setIsBatchMode(false);
+
+      // Refresh channel counts
+      refreshCounts();
+    } catch (error) {
+      console.error('Error processing batch action:', error);
+    } finally {
+      setProcessing(false);
+    }
   };
 
   if (loading) {
@@ -368,13 +676,84 @@ export default function TriageScreen() {
           <Ionicons name="chevron-back" size={24} color={colors.ink} />
         </Pressable>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Triage</Text>
-          <Text style={styles.headerSubtitle}>{leads.length} properties</Text>
+          <Text style={styles.headerTitle}>{isBatchMode ? 'Batch Mode' : 'Triage'}</Text>
+          <Text style={styles.headerSubtitle}>
+            {isBatchMode
+              ? `${selectedLeadIds.size} of ${leads.length} selected`
+              : channelCounts.find(c => c.channel === selectedChannel)?.label || 'All Leads'}
+          </Text>
         </View>
-        <Pressable onPress={fetchLeads} style={styles.refreshButton}>
-          <Ionicons name="refresh" size={24} color={colors.ink} />
-        </Pressable>
+        <View style={styles.headerRightButtons}>
+          {leads.length > 1 && (
+            <Pressable
+              onPress={toggleBatchMode}
+              style={[styles.batchToggle, isBatchMode && styles.batchToggleActive]}
+            >
+              <Ionicons
+                name={isBatchMode ? 'close' : 'checkbox-outline'}
+                size={20}
+                color={isBatchMode ? colors.white : colors.ink}
+              />
+            </Pressable>
+          )}
+          {!isBatchMode && (
+            <Pressable onPress={() => fetchLeads()} style={styles.refreshButton}>
+              <Ionicons name="refresh" size={24} color={colors.ink} />
+            </Pressable>
+          )}
+        </View>
       </View>
+
+      {/* Channel Picker */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.channelStrip}
+        contentContainerStyle={styles.channelStripContent}
+      >
+        {channelCounts.map((channel) => {
+          const isSelected = selectedChannel === channel.channel;
+          const hasLeads = channel.count > 0;
+          return (
+            <Pressable
+              key={channel.channel}
+              style={[
+                styles.channelChip,
+                isSelected && styles.channelChipSelected,
+                !hasLeads && styles.channelChipEmpty,
+              ]}
+              onPress={() => handleChannelChange(channel.channel)}
+              disabled={!hasLeads && channel.channel !== 'all'}
+            >
+              <Text style={styles.channelIcon}>{channel.icon}</Text>
+              <Text
+                style={[
+                  styles.channelLabel,
+                  isSelected && styles.channelLabelSelected,
+                  !hasLeads && styles.channelLabelEmpty,
+                ]}
+              >
+                {channel.label}
+              </Text>
+              <View
+                style={[
+                  styles.channelCount,
+                  isSelected && styles.channelCountSelected,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.channelCountText,
+                    isSelected && styles.channelCountTextSelected,
+                  ]}
+                >
+                  {channel.count}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
       {/* Stats bar */}
       <View style={styles.statsBar}>
@@ -420,20 +799,104 @@ export default function TriageScreen() {
         </View>
       </View>
 
-      {/* Card stack */}
+      {/* Card stack or Batch list */}
       <View style={styles.cardStack}>
         {leads.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="checkmark-circle" size={80} color={colors.brand[600]} />
-            <Text style={styles.emptyTitle}>All caught up!</Text>
-            <Text style={styles.emptySubtitle}>
-              No more properties to triage.{'\n'}Go drive for more!
+            <Ionicons
+              name={selectedChannel === 'driving' ? 'car' :
+                    selectedChannel === 'list_import' ? 'document-text' :
+                    selectedChannel === 'distress' ? 'alert-circle' :
+                    selectedChannel === 'watch_list' ? 'eye' :
+                    'checkmark-circle'}
+              size={80}
+              color={colors.brand[600]}
+            />
+            <Text style={styles.emptyTitle}>
+              {selectedChannel === 'all' ? 'All caught up!' :
+               selectedChannel === 'driving' ? 'No driving leads' :
+               selectedChannel === 'list_import' ? 'No list imports' :
+               selectedChannel === 'distress' ? 'No distress alerts' :
+               selectedChannel === 'watch_list' ? 'Watch list empty' :
+               'No manual leads'}
             </Text>
-            <Pressable style={styles.driveButton} onPress={() => router.push('/drive')}>
-              <Ionicons name="car" size={20} color="white" />
-              <Text style={styles.driveButtonText}>Start Driving</Text>
-            </Pressable>
+            <Text style={styles.emptySubtitle}>
+              {selectedChannel === 'all' ? 'No more properties to triage.\nGo drive for more!' :
+               selectedChannel === 'driving' ? 'Go out and capture some properties!\nThey\'ll appear here for review.' :
+               selectedChannel === 'list_import' ? 'Import a list from the web app\nto populate this channel.' :
+               selectedChannel === 'distress' ? 'No distress signals detected.\nCheck back later for alerts.' :
+               selectedChannel === 'watch_list' ? 'Swipe up on leads to add\nthem to your watch list.' :
+               'Add leads manually from\nthe property search.'}
+            </Text>
+            {(selectedChannel === 'all' || selectedChannel === 'driving') && (
+              <Pressable style={styles.driveButton} onPress={() => router.push('/drive')}>
+                <Ionicons name="car" size={20} color="white" />
+                <Text style={styles.driveButtonText}>Start Driving</Text>
+              </Pressable>
+            )}
+            {selectedChannel !== 'all' && selectedChannel !== 'driving' && (
+              <Pressable
+                style={[styles.driveButton, { backgroundColor: colors.slate[600] }]}
+                onPress={() => handleChannelChange('all')}
+              >
+                <Ionicons name="layers" size={20} color="white" />
+                <Text style={styles.driveButtonText}>View All Leads</Text>
+              </Pressable>
+            )}
           </View>
+        ) : isBatchMode ? (
+          /* Batch selection list */
+          <ScrollView style={styles.batchList} showsVerticalScrollIndicator={false}>
+            {/* Select All / Deselect All buttons */}
+            <View style={styles.batchSelectHeader}>
+              <Pressable
+                style={styles.batchSelectButton}
+                onPress={selectedLeadIds.size === leads.length ? deselectAllLeads : selectAllLeads}
+              >
+                <Ionicons
+                  name={selectedLeadIds.size === leads.length ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={colors.brand[600]}
+                />
+                <Text style={styles.batchSelectButtonText}>
+                  {selectedLeadIds.size === leads.length ? 'Deselect All' : 'Select All'}
+                </Text>
+              </Pressable>
+            </View>
+
+            {leads.map((lead) => {
+              const isSelected = selectedLeadIds.has(lead.id);
+              const sourceInfo = getSourceDisplay((lead as any).source);
+              return (
+                <Pressable
+                  key={lead.id}
+                  style={[styles.batchItem, isSelected && styles.batchItemSelected]}
+                  onPress={() => toggleLeadSelection(lead.id)}
+                >
+                  <View style={styles.batchCheckbox}>
+                    <Ionicons
+                      name={isSelected ? 'checkbox' : 'square-outline'}
+                      size={24}
+                      color={isSelected ? colors.brand[600] : colors.slate[400]}
+                    />
+                  </View>
+                  <View style={styles.batchItemContent}>
+                    <Text style={styles.batchItemAddress} numberOfLines={1}>
+                      {lead.address || 'Unknown address'}
+                    </Text>
+                    <View style={styles.batchItemMeta}>
+                      <Text style={styles.batchItemScore}>
+                        Score: {Math.round(lead.rank_score || 0)}
+                      </Text>
+                      <Text style={[styles.batchItemSource, { color: sourceInfo.color }]}>
+                        {sourceInfo.icon} {sourceInfo.label}
+                      </Text>
+                    </View>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         ) : (
           leads.slice(0, 3).map((lead, index) => (
             <SwipeCard
@@ -441,9 +904,17 @@ export default function TriageScreen() {
               lead={lead}
               isFirst={index === 0}
               onSwipe={handleSwipe}
-              onDismissReasonRequired={() => { }}
+              onTap={() => handleCardTap(lead)}
             />
           )).reverse()
+        )}
+
+        {/* Floating Undo Button */}
+        {undoState && (
+          <Pressable style={styles.undoButton} onPress={handleUndo}>
+            <Ionicons name="arrow-undo" size={20} color="white" />
+            <Text style={styles.undoButtonText}>Undo</Text>
+          </Pressable>
         )}
 
         {processing && (
@@ -454,7 +925,7 @@ export default function TriageScreen() {
       </View>
 
       {/* Bottom action buttons (fallback for non-swipe users) */}
-      {leads.length > 0 && (
+      {leads.length > 0 && !isBatchMode && (
         <View style={styles.actionBar}>
           <Pressable
             style={[styles.actionButton, { backgroundColor: SWIPE_COLORS.left }]}
@@ -484,6 +955,76 @@ export default function TriageScreen() {
             <Ionicons name="analytics" size={28} color="white" />
           </Pressable>
         </View>
+      )}
+
+      {/* Batch action bar */}
+      {isBatchMode && selectedLeadIds.size > 0 && (
+        <View style={styles.batchActionBar}>
+          <Pressable
+            style={[styles.batchActionButton, { backgroundColor: SWIPE_COLORS.left }]}
+            onPress={() => handleBatchAction('left', 'batch_dismiss')}
+            disabled={processing}
+          >
+            <Ionicons name="close" size={24} color="white" />
+            <Text style={styles.batchActionText}>Pass All</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.batchActionButton, { backgroundColor: SWIPE_COLORS.up }]}
+            onPress={() => handleBatchAction('up')}
+            disabled={processing}
+          >
+            <Ionicons name="eye" size={24} color="white" />
+            <Text style={styles.batchActionText}>Watch All</Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.batchActionButton, { backgroundColor: SWIPE_COLORS.right }]}
+            onPress={() => handleBatchAction('right')}
+            disabled={processing}
+          >
+            <Ionicons name="analytics" size={24} color="white" />
+            <Text style={styles.batchActionText}>Analyze All</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Pass Button Dismiss Modal */}
+      {showPassModal && (
+        <View style={styles.passModalOverlay}>
+          <View style={styles.passModal}>
+            <Text style={styles.passModalTitle}>Why are you passing?</Text>
+            {DISMISS_REASONS.map((reason) => (
+              <Pressable
+                key={reason.id}
+                style={styles.passModalOption}
+                onPress={() => handlePassButtonReason(reason.id)}
+              >
+                <Text style={styles.passModalOptionText}>{reason.label}</Text>
+              </Pressable>
+            ))}
+            <Pressable
+              style={styles.passModalCancel}
+              onPress={() => setShowPassModal(false)}
+            >
+              <Text style={styles.passModalCancelText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {/* Progress indicator */}
+      {leads.length > 0 && totalLeadsRef.current > 0 && (
+        <View style={styles.progressIndicator}>
+          <Text style={styles.progressText}>
+            {stats.kept + stats.passed + stats.watched} of {totalLeadsRef.current} reviewed
+          </Text>
+        </View>
+      )}
+
+      {/* First-time user tutorial */}
+      {showTutorial && (
+        <SwipeTutorial onComplete={() => setShowTutorial(false)} />
       )}
     </SafeAreaView>
   );
@@ -530,6 +1071,81 @@ const styles = StyleSheet.create({
   },
   refreshButton: {
     padding: spacing.xs,
+  },
+  headerRightButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  batchToggle: {
+    padding: spacing.xs,
+    borderRadius: radii.sm,
+    backgroundColor: colors.slate[100],
+  },
+  batchToggleActive: {
+    backgroundColor: colors.brand[600],
+  },
+  channelStrip: {
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.slate[200],
+    maxHeight: 56,
+  },
+  channelStripContent: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  channelChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.full,
+    backgroundColor: colors.slate[100],
+    borderWidth: 1,
+    borderColor: colors.slate[200],
+  },
+  channelChipSelected: {
+    backgroundColor: colors.brand[600],
+    borderColor: colors.brand[600],
+  },
+  channelChipEmpty: {
+    opacity: 0.5,
+  },
+  channelIcon: {
+    fontSize: 16,
+  },
+  channelLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.slate[700],
+  },
+  channelLabelSelected: {
+    color: 'white',
+  },
+  channelLabelEmpty: {
+    color: colors.slate[400],
+  },
+  channelCount: {
+    backgroundColor: colors.slate[200],
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radii.full,
+    minWidth: 22,
+    alignItems: 'center',
+  },
+  channelCountSelected: {
+    backgroundColor: 'rgba(255,255,255,0.25)',
+  },
+  channelCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.slate[600],
+  },
+  channelCountTextSelected: {
+    color: 'white',
   },
   statsBar: {
     flexDirection: 'row',
@@ -632,7 +1248,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
   },
   photoContainer: {
-    height: '50%',
+    height: '65%',
     backgroundColor: colors.slate[200],
   },
   photo: {
@@ -664,15 +1280,39 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
   },
+  sourceBadge: {
+    position: 'absolute',
+    top: spacing.md,
+    left: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+  },
+  sourceBadgeIcon: {
+    fontSize: 12,
+  },
+  sourceBadgeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '700',
+  },
   infoSection: {
     flex: 1,
-    padding: spacing.md,
+    padding: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   address: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     color: colors.ink,
-    lineHeight: 24,
+    lineHeight: 20,
   },
   city: {
     fontSize: 14,
@@ -833,5 +1473,183 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: radii.lg,
+  },
+  // Undo button styles
+  undoButton: {
+    position: 'absolute',
+    bottom: -60,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: colors.slate[800],
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.full,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  undoButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Pass modal styles
+  passModalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
+  },
+  passModal: {
+    width: SCREEN_WIDTH - spacing.xl * 2,
+    backgroundColor: 'white',
+    borderRadius: radii.lg,
+    padding: spacing.lg,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  passModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.ink,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+  },
+  passModalOption: {
+    padding: spacing.md,
+    backgroundColor: colors.slate[100],
+    borderRadius: radii.md,
+    marginBottom: spacing.sm,
+  },
+  passModalOptionText: {
+    fontSize: 16,
+    color: colors.ink,
+    textAlign: 'center',
+  },
+  passModalCancel: {
+    padding: spacing.md,
+    marginTop: spacing.sm,
+  },
+  passModalCancelText: {
+    fontSize: 16,
+    color: colors.slate[500],
+    textAlign: 'center',
+  },
+  // Progress indicator styles
+  progressIndicator: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+  },
+  progressText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  // Batch mode styles
+  batchList: {
+    flex: 1,
+    width: '100%',
+    paddingHorizontal: spacing.md,
+  },
+  batchSelectHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  batchSelectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.brand[50],
+    borderRadius: radii.full,
+  },
+  batchSelectButtonText: {
+    color: colors.brand[600],
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  batchItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: radii.md,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  batchItemSelected: {
+    borderColor: colors.brand[500],
+    backgroundColor: colors.brand[50],
+  },
+  batchCheckbox: {
+    marginRight: spacing.md,
+  },
+  batchItemContent: {
+    flex: 1,
+  },
+  batchItemAddress: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.ink,
+    marginBottom: 4,
+  },
+  batchItemMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  batchItemScore: {
+    fontSize: 13,
+    color: colors.slate[500],
+  },
+  batchItemSource: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  batchActionBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: 'white',
+    borderTopWidth: 1,
+    borderTopColor: colors.slate[200],
+  },
+  batchActionButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.md,
+    minWidth: 100,
+  },
+  batchActionText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
   },
 });

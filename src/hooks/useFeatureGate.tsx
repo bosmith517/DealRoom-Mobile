@@ -4,8 +4,7 @@
  * Checks if user has access to specific features based on their subscription tier.
  * Uses the pricing config as the single source of truth.
  *
- * Reads plan_key from dealroom_tenant_entitlements.metadata.plan_key
- * where app_key = 'dealroom'
+ * Reads plan_key from dealroom_tenant_entitlements where app_key = 'flipmantis'
  */
 
 import { useCallback, useMemo } from 'react'
@@ -34,37 +33,42 @@ interface FeatureGateResult {
   isLoading: boolean
 }
 
-// Map web app plan keys to mobile tier IDs
+// Map plan_key values to mobile tier IDs
+// New plan keys: free, starter, pro, team (direct mapping)
+// Legacy plan keys: lite, core, enterprise (backwards compatibility)
 const PLAN_TO_TIER: Record<string, TierId> = {
+  // New consolidated plan names (direct mapping)
   free: 'free',
-  lite: 'starter',    // lite -> starter
-  core: 'starter',    // core -> starter
+  starter: 'starter',
   pro: 'pro',
-  enterprise: 'team', // enterprise -> team
+  team: 'team',
+  // Legacy plan names (backwards compatibility)
+  lite: 'starter',
+  core: 'starter',
+  enterprise: 'team',
 }
 
 export function useFeatureGate(): FeatureGateResult {
   const { entitlements, isLoading } = useAuth()
 
   // Get the user's tier from entitlements
-  // The plan is stored in metadata.plan_key of the 'dealroom' entitlement
+  // The plan_key is now a direct column on the entitlement (not in metadata)
   const tier = useMemo((): TierId => {
-    // Find the dealroom entitlement
-    const dealroomEntitlement = entitlements.find(
-      (e) => e.app_key === 'dealroom' && e.is_enabled
+    // Find the flipmantis entitlement
+    const fmEntitlement = entitlements.find(
+      (e) => e.app_key === 'flipmantis' && e.is_enabled
     )
 
-    // Has dealroom entitlement
-    if (dealroomEntitlement) {
-      if (dealroomEntitlement.metadata?.plan_key) {
-        const planKey = dealroomEntitlement.metadata.plan_key as string
-        return PLAN_TO_TIER[planKey] || 'pro' // Default to pro if unknown plan
-      }
-      // Has entitlement but no plan_key = default to pro (matches web behavior)
-      return 'pro'
+    // Has FlipMantis entitlement
+    if (fmEntitlement) {
+      // plan_key is now a direct column, fallback to metadata for legacy data
+      const planKey = fmEntitlement.plan_key ||
+        (fmEntitlement.metadata?.plan_key as string) ||
+        'pro'
+      return PLAN_TO_TIER[planKey] || 'pro' // Default to pro if unknown plan
     }
 
-    // No dealroom entitlement = free tier
+    // No flipmantis entitlement = free tier
     return 'free'
   }, [entitlements])
 

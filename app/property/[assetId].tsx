@@ -22,7 +22,7 @@ import {
   Linking,
 } from 'react-native'
 import { useLocalSearchParams, Stack, Link, useRouter } from 'expo-router'
-import { ScreenContainer, Card, Button } from '../../src/components'
+import { ScreenContainer, Card, Button, PassDealModal, OutcomeLogger, SellerMotivationCard } from '../../src/components'
 import { colors, spacing, typography, radii } from '../../src/theme'
 import {
   getDeal,
@@ -35,7 +35,7 @@ import {
   type ActivityEvent,
 } from '../../src/services'
 import { DEAL_STAGE_CONFIG } from '../../src/types'
-import type { DealWithProperty, Underwriting, DealStage, Property } from '../../src/types'
+import type { Deal, DealWithProperty, Underwriting, DealStage, Property } from '../../src/types'
 import type { PropertyData } from '../../src/types/attom'
 import { supabase } from '../../src/contexts/AuthContext'
 
@@ -140,7 +140,7 @@ function ActivityItem({ event }: { event: ActivityEvent }) {
     offer_sent: '💰',
     default: '📌',
   }
-  const icon = iconMap[event.event_type] || iconMap.default
+  const icon = (event.event_type && iconMap[event.event_type as keyof typeof iconMap]) || iconMap.default
 
   return (
     <View style={styles.activityItem}>
@@ -251,6 +251,10 @@ export default function PropertyDetailScreen() {
 
   // Portal sharing state
   const [showPortalModal, setShowPortalModal] = useState(false)
+
+  // Intelligence components state
+  const [showPassModal, setShowPassModal] = useState(false)
+  const [enrichingMotivation, setEnrichingMotivation] = useState(false)
   const [portalForm, setPortalForm] = useState({
     stakeholderName: '',
     stakeholderType: 'investor',
@@ -397,7 +401,7 @@ export default function PropertyDetailScreen() {
         expected_profit: editForm.expected_profit ? parseFloat(editForm.expected_profit) : undefined,
       }
 
-      const { error: dealError } = await updateDeal(deal.id, dealUpdates)
+      const { error: dealError } = await updateDeal(deal.id, dealUpdates as Partial<Deal>)
       if (dealError) throw dealError
 
       // Update property fields if property exists
@@ -528,9 +532,9 @@ export default function PropertyDetailScreen() {
 
     try {
       await Share.share({
-        message: `You've been invited to view a property on DealRoom: ${generatedLink}`,
+        message: `You've been invited to view a property on FlipMantis: ${generatedLink}`,
         url: generatedLink,
-        title: 'DealRoom Property Portal',
+        title: 'FlipMantis Property Portal',
       })
     } catch (err) {
       console.error('Share error:', err)
@@ -552,6 +556,21 @@ export default function PropertyDetailScreen() {
       Alert.alert('Portal Link', generatedLink)
     }
   }, [generatedLink])
+
+  // Enrich motivation data
+  const handleEnrichMotivation = useCallback(async () => {
+    if (!deal) return
+    setEnrichingMotivation(true)
+    try {
+      // This will trigger the n8n workflow to enrich seller data
+      console.log('Triggering motivation enrichment for deal:', deal.id)
+      // After enrichment, the SellerMotivationCard will reload automatically
+    } catch (err) {
+      console.error('Error enriching motivation:', err)
+    } finally {
+      setEnrichingMotivation(false)
+    }
+  }, [deal])
 
   // Reset portal modal state
   const handleClosePortalModal = useCallback(() => {
@@ -1102,7 +1121,7 @@ export default function PropertyDetailScreen() {
 
                     {/* Property Identifiers */}
                     <ExpandableSection title="Property Identifiers" icon="🔑">
-                      <DataRow label="ATTOM ID" value={attomData.attomId} />
+                      <DataRow label="Property ID" value={attomData.attomId} />
                       <DataRow label="APN" value={attomData.apn} />
                       <DataRow label="FIPS" value={attomData.fips} />
                       <DataRow label="County" value={attomData.county} />
@@ -1158,6 +1177,35 @@ export default function PropertyDetailScreen() {
               </Button>
             )}
 
+            {/* Seller Motivation Score */}
+            {!isEditing && deal && (
+              <>
+                <Text style={styles.sectionTitle}>Seller Intelligence</Text>
+                <SellerMotivationCard
+                  dealId={deal.id}
+                  attomId={attomData?.attomId}
+                  onEnrich={handleEnrichMotivation}
+                  enriching={enrichingMotivation}
+                />
+              </>
+            )}
+
+            {/* Deal Outcome Logger (for completed deals) */}
+            {!isEditing && deal && ['closing', 'closed', 'sold', 'lost'].includes(deal.stage) && (
+              <>
+                <Text style={styles.sectionTitle}>Deal Memory</Text>
+                <OutcomeLogger
+                  dealId={deal.id}
+                  dealName={deal.name}
+                  initialPredictions={{
+                    arv: deal.arv,
+                    rehabCost: deal.rehab_budget,
+                    profit: deal.expected_profit,
+                  }}
+                />
+              </>
+            )}
+
             {/* Quick Actions */}
             {!isEditing && (
               <>
@@ -1168,12 +1216,26 @@ export default function PropertyDetailScreen() {
                       Start Evaluation
                     </Button>
                   </Link>
+                  <Link href={`/property/costs/${deal?.id}`} asChild>
+                    <Button variant="outline" style={styles.actionButton}>
+                      View Costs
+                    </Button>
+                  </Link>
+                </View>
+                <View style={[styles.actionsRow, { marginTop: spacing.sm }]}>
                   <Button
                     variant="outline"
                     style={styles.actionButton}
                     onPress={() => setShowPortalModal(true)}
                   >
                     Share Portal
+                  </Button>
+                  <Button
+                    variant="outline"
+                    style={[styles.actionButton, styles.passButton]}
+                    onPress={() => setShowPassModal(true)}
+                  >
+                    Pass on Deal
                   </Button>
                 </View>
               </>
@@ -1411,6 +1473,26 @@ export default function PropertyDetailScreen() {
           </ScrollView>
         </View>
       </Modal>
+
+      {/* Pass Deal Modal */}
+      {deal && (
+        <PassDealModal
+          visible={showPassModal}
+          onClose={() => setShowPassModal(false)}
+          onPassed={() => {
+            // Optionally navigate away or update UI
+            Alert.alert('Deal Passed', 'This deal has been moved to the passed pile.')
+          }}
+          dealId={deal.id}
+          attomId={attomData?.attomId}
+          address={address}
+          city={city}
+          state={state}
+          zipCode={zip}
+          askingPrice={deal.purchase_price}
+          maxOffer={underwriting?.max_allowable_offer}
+        />
+      )}
     </>
   )
 }
@@ -1615,6 +1697,9 @@ const styles = StyleSheet.create({
   },
   actionButton: {
     flex: 1,
+  },
+  passButton: {
+    borderColor: colors.error[200],
   },
   stageScrollView: {
     marginBottom: spacing.md,

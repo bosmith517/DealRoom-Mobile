@@ -134,8 +134,8 @@ function TaskCard({
   onComplete: (id: string) => void
   onSnooze: (id: string) => void
 }) {
-  const overdue = task.status !== 'done' && isOverdue(task.due_at)
-  const icon = TASK_TYPE_ICONS[task.followup_type] || TASK_TYPE_ICONS.default
+  const overdue = task.status !== 'completed' && isOverdue(task.due_at)
+  const icon = TASK_TYPE_ICONS[task.task_type] || TASK_TYPE_ICONS.default
 
   return (
     <Card style={[styles.taskCard, overdue && styles.taskCardOverdue]} padding="md">
@@ -153,7 +153,7 @@ function TaskCard({
             )}
           </View>
         </View>
-        {task.status !== 'done' && (
+        {task.status !== 'completed' && (
           <TouchableOpacity
             style={styles.completeButton}
             onPress={() => onComplete(task.id)}
@@ -189,7 +189,7 @@ function TaskCard({
             </Link>
           )}
         </View>
-        {task.status !== 'done' && (
+        {task.status !== 'completed' && (
           <TouchableOpacity
             style={styles.snoozeButton}
             onPress={() => onSnooze(task.id)}
@@ -230,7 +230,7 @@ function CreateTaskModal({
       title: title.trim(),
       description: description.trim() || undefined,
       due_at: dueDate.toISOString(),
-      followup_type: taskType,
+      task_type: taskType,
       recurring_pattern: recurring,
     })
     setCreating(false)
@@ -369,7 +369,7 @@ export default function TasksScreen() {
           result = await getUpcomingFollowups(50)
           break
         default:
-          result = await getAllFollowups({ status: ['open', 'in_progress'], limit: 100 })
+          result = await getAllFollowups({ status: ['pending', 'in_progress'], limit: 100 })
       }
 
       if (result.error) {

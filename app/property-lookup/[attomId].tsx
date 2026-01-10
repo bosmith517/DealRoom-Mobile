@@ -20,7 +20,7 @@ import {
 import { useLocalSearchParams, Stack, Link, useRouter } from 'expo-router'
 import { ScreenContainer, Card, Button } from '../../src/components'
 import { colors, spacing, typography, radii } from '../../src/theme'
-import { attomService } from '../../src/services'
+import { attomService, createDealFromProperty } from '../../src/services'
 import type { PropertyData } from '../../src/types/attom'
 
 // Format currency
@@ -166,9 +166,6 @@ export default function PropertyLookupScreen() {
 
     setAddingToPipeline(true)
     try {
-      // Import the createDealFromProperty function
-      const { createDealFromProperty } = await import('../../src/services/api')
-
       const dealId = await createDealFromProperty({
         attomId: propertyData.attomId,
         address: propertyData.address,
@@ -527,7 +524,7 @@ export default function PropertyLookupScreen() {
 
               {/* Property Identifiers */}
               <ExpandableSection title="Property Identifiers" icon="🔑">
-                <DataRow label="ATTOM ID" value={propertyData.attomId} />
+                <DataRow label="Property ID" value={propertyData.attomId} />
                 <DataRow label="APN" value={propertyData.apn} />
                 <DataRow label="FIPS" value={propertyData.fips} />
                 <DataRow label="County" value={propertyData.county} />
@@ -579,7 +576,7 @@ export default function PropertyLookupScreen() {
           )}
 
           {/* Debug Info */}
-          <Text style={styles.debugText}>ATTOM ID: {attomId || propertyData?.attomId || 'N/A'}</Text>
+          <Text style={styles.debugText}>ID: {attomId || propertyData?.attomId || 'N/A'}</Text>
         </ScrollView>
       </ScreenContainer>
     </>

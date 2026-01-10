@@ -5,12 +5,15 @@
  */
 
 import { useState } from 'react'
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, Alert, Pressable, Linking } from 'react-native'
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, Alert, Pressable, Linking, Image } from 'react-native'
 import { useRouter } from 'expo-router'
 import { CenteredContainer, Card, Button, Input } from '../../src/components'
 import { colors, spacing, typography, radii } from '../../src/theme'
 import { useAuth } from '../../src/contexts/AuthContext'
 import { supabase } from '../../src/lib/supabase'
+
+// FlipMantis logo
+const LOGO = require('../../assets/emblem-transparent.png')
 
 export default function LoginScreen() {
   const router = useRouter()
@@ -88,7 +91,7 @@ export default function LoginScreen() {
   }
 
   const handleContactSales = () => {
-    Linking.openURL('mailto:support@tradeworksflow.com?subject=DealRoom%20Access%20Request')
+    Linking.openURL('mailto:support@tradeworksflow.com?subject=FlipMantis%20Access%20Request')
   }
 
   return (
@@ -99,11 +102,9 @@ export default function LoginScreen() {
       <CenteredContainer>
         {/* Logo */}
         <View style={styles.logoContainer}>
-          <View style={styles.logoIcon}>
-            <Text style={styles.logoEmoji}>🏠</Text>
-          </View>
-          <Text style={styles.logoText}>DealRoom</Text>
-          <Text style={styles.tagline}>Real Estate Investment Platform</Text>
+          <Image source={LOGO} style={styles.logoImage} resizeMode="contain" />
+          <Text style={styles.logoText}>FlipMantis</Text>
+          <Text style={styles.tagline}>Real Estate Deal Management</Text>
         </View>
 
         {/* Login Form */}
@@ -173,17 +174,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.xl,
   },
-  logoIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: radii.xl,
-    backgroundColor: colors.brand[500],
-    alignItems: 'center',
-    justifyContent: 'center',
+  logoImage: {
+    width: 80,
+    height: 80,
     marginBottom: spacing.md,
-  },
-  logoEmoji: {
-    fontSize: 36,
   },
   logoText: {
     fontSize: typography.fontSize['3xl'],

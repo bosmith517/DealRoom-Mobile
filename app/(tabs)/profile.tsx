@@ -4,7 +4,7 @@
  * User profile, settings, and sign out.
  */
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -16,17 +16,22 @@ import {
   TextInput,
   Switch,
   ScrollView,
+  Share,
+  ActivityIndicator,
 } from 'react-native'
 import { useRouter } from 'expo-router'
+import * as Haptics from 'expo-haptics'
 import { ScreenContainer, Card, Button } from '../../src/components'
-import { colors, spacing, typography, radii } from '../../src/theme'
+import { colors, spacing, typography, radii, shadows } from '../../src/theme'
 import { useAuth } from '../../src/contexts/AuthContext'
 import { useSettings } from '../../src/contexts/SettingsContext'
+import { useFeatureGate } from '../../src/hooks/useFeatureGate'
+import { profileService } from '../../src/services'
 
 // Support URLs
-const HELP_CENTER_URL = 'https://dealroom.app/help'
-const TERMS_URL = 'https://dealroom.app/terms'
-const SUPPORT_EMAIL = 'support@dealroom.app'
+const HELP_CENTER_URL = 'https://flipmantis.com/help'
+const TERMS_URL = 'https://flipmantis.com/terms'
+const SUPPORT_EMAIL = 'support@flipmantis.com'
 
 // Menu Item Component
 function MenuItem({
@@ -70,10 +75,70 @@ const STRATEGY_OPTIONS = [
   { key: 'hold', label: 'Buy & Hold', description: 'Long-term rental properties' },
 ] as const
 
+// Web billing portal URL
+const WEB_BILLING_URL = 'https://app.flipmantis.com/settings/billing'
+
+// Format currency
+function formatCurrency(amount: number): string {
+  if (amount >= 1000000) return `$${(amount / 1000000).toFixed(1)}M`
+  if (amount >= 1000) return `$${(amount / 1000).toFixed(0)}K`
+  return `$${amount.toFixed(0)}`
+}
+
+// Referral URL
+const REFERRAL_URL = 'https://flipmantis.com/invite'
+
 export default function ProfileScreen() {
   const router = useRouter()
   const { user, signOut } = useAuth()
   const { settings, updateSettings } = useSettings()
+  const { tier, tierName, isLoading: tierLoading } = useFeatureGate()
+
+  // Data states
+  const [monthlyStats, setMonthlyStats] = useState<{
+    leadsCapured: number
+    dealsInProgress: number
+    dealsClosedThisMonth: number
+    projectedProfit: number
+    tasksCompleted: number
+  } | null>(null)
+  const [recentDeals, setRecentDeals] = useState<Array<{
+    id: string
+    name: string
+    address: string
+    stage: string
+    lastViewed: string
+  }>>([])
+  const [integrations, setIntegrations] = useState<Array<{
+    name: string
+    connected: boolean
+    lastSync?: string
+  }>>([])
+  const [statsLoading, setStatsLoading] = useState(true)
+
+  // Fetch profile data
+  const fetchProfileData = useCallback(async () => {
+    setStatsLoading(true)
+    try {
+      const [statsResult, dealsResult, integrationsResult] = await Promise.all([
+        profileService.getMonthlyStats(),
+        profileService.getRecentDeals(3),
+        profileService.getIntegrationStatus(),
+      ])
+
+      if (statsResult.data) setMonthlyStats(statsResult.data)
+      if (dealsResult.data) setRecentDeals(dealsResult.data)
+      if (integrationsResult.data) setIntegrations(integrationsResult.data)
+    } catch (err) {
+      console.error('[Profile] Error fetching data:', err)
+    } finally {
+      setStatsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchProfileData()
+  }, [fetchProfileData])
 
   // Modal states
   const [showPreferencesModal, setShowPreferencesModal] = useState(false)
@@ -94,6 +159,19 @@ export default function ProfileScreen() {
         onPress: signOut,
       },
     ])
+  }
+
+  // Share referral link
+  const handleShareReferral = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    try {
+      await Share.share({
+        message: `Join me on FlipMantis - the ultimate real estate investing app! Sign up here: ${REFERRAL_URL}`,
+        url: REFERRAL_URL,
+      })
+    } catch (err) {
+      console.error('[Profile] Share error:', err)
+    }
   }
 
   // Toggle strategy in preferences
@@ -132,12 +210,116 @@ export default function ProfileScreen() {
         <Text style={styles.userName}>{displayName}</Text>
         <Text style={styles.userEmail}>{user?.email || 'Not signed in'}</Text>
 
-        {/* Entitlement Badge */}
-        <View style={styles.entitlementBadge}>
-          <Text style={styles.entitlementIcon}>✓</Text>
-          <Text style={styles.entitlementText}>DealRoom Pro</Text>
-        </View>
+        {/* Entitlement Badge - Dynamic based on tier */}
+        <TouchableOpacity
+          style={[
+            styles.entitlementBadge,
+            tier === 'free' && styles.entitlementBadgeFree,
+          ]}
+          onPress={() => Linking.openURL(WEB_BILLING_URL)}
+        >
+          <Text style={[
+            styles.entitlementIcon,
+            tier === 'free' && styles.entitlementTextFree,
+          ]}>
+            {tier === 'free' ? '○' : '✓'}
+          </Text>
+          <Text style={[
+            styles.entitlementText,
+            tier === 'free' && styles.entitlementTextFree,
+          ]}>
+            {tierLoading ? 'Loading...' : `FlipMantis ${tierName}`}
+          </Text>
+          <Text style={[
+            styles.entitlementArrow,
+            tier === 'free' && styles.entitlementTextFree,
+          ]}>›</Text>
+        </TouchableOpacity>
       </Card>
+
+      {/* Usage Stats Section */}
+      <Text style={styles.sectionTitle}>This Month</Text>
+      <Card style={styles.statsCard}>
+        {statsLoading ? (
+          <ActivityIndicator size="small" color={colors.brand[500]} />
+        ) : monthlyStats ? (
+          <View style={styles.statsGrid}>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{monthlyStats.leadsCapured}</Text>
+              <Text style={styles.statLabel}>Leads</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{monthlyStats.dealsInProgress}</Text>
+              <Text style={styles.statLabel}>Active Deals</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={[styles.statValue, styles.statValueProfit]}>
+                {formatCurrency(monthlyStats.projectedProfit)}
+              </Text>
+              <Text style={styles.statLabel}>Projected</Text>
+            </View>
+          </View>
+        ) : (
+          <Text style={styles.statsEmpty}>No data available</Text>
+        )}
+        {monthlyStats && (
+          <View style={styles.statsFooter}>
+            <Text style={styles.statsFooterText}>
+              {monthlyStats.tasksCompleted} tasks completed • {monthlyStats.dealsClosedThisMonth} deals closed
+            </Text>
+          </View>
+        )}
+      </Card>
+
+      {/* Streak Badge */}
+      <View style={styles.streakCard}>
+        <Text style={styles.streakIcon}>🔥</Text>
+        <View style={styles.streakContent}>
+          <Text style={styles.streakTitle}>7-Day Login Streak!</Text>
+          <Text style={styles.streakSubtitle}>Keep it going to unlock rewards</Text>
+        </View>
+      </View>
+
+      {/* Recent Deals */}
+      {recentDeals.length > 0 && (
+        <>
+          <Text style={styles.sectionTitle}>Recent Deals</Text>
+          <Card padding="none">
+            {recentDeals.map((deal, index) => (
+              <TouchableOpacity
+                key={deal.id}
+                style={styles.recentDealRow}
+                onPress={() => router.push(`/deal/${deal.id}`)}
+              >
+                <View style={styles.recentDealIcon}>
+                  <Text style={styles.recentDealIconText}>🏠</Text>
+                </View>
+                <View style={styles.recentDealContent}>
+                  <Text style={styles.recentDealAddress} numberOfLines={1}>
+                    {deal.address}
+                  </Text>
+                  <Text style={styles.recentDealStage}>{deal.stage}</Text>
+                </View>
+                <Text style={styles.recentDealArrow}>›</Text>
+              </TouchableOpacity>
+            ))}
+          </Card>
+        </>
+      )}
+
+      {/* Refer a Friend */}
+      <TouchableOpacity style={styles.referralCard} onPress={handleShareReferral}>
+        <View style={styles.referralContent}>
+          <Text style={styles.referralIcon}>🎁</Text>
+          <View style={styles.referralText}>
+            <Text style={styles.referralTitle}>Refer a Friend</Text>
+            <Text style={styles.referralSubtitle}>Share FlipMantis and earn rewards</Text>
+          </View>
+        </View>
+        <Text style={styles.referralArrow}>›</Text>
+      </TouchableOpacity>
 
       {/* Investment Section */}
       <Text style={styles.sectionTitle}>Investment</Text>
@@ -215,10 +397,32 @@ export default function ProfileScreen() {
           onPress={() =>
             Alert.alert(
               'Storage',
-              'DealRoom is using approximately 245 MB of storage for cached data, photos, and offline leads.'
+              'FlipMantis is using approximately 245 MB of storage for cached data, photos, and offline leads.'
             )
           }
         />
+      </Card>
+
+      {/* Integrations Section */}
+      <Text style={styles.sectionTitle}>Integrations</Text>
+      <Card padding="none">
+        {integrations.map((integration, index) => (
+          <View key={integration.name}>
+            {index > 0 && <View style={styles.menuDivider} />}
+            <View style={styles.integrationRow}>
+              <View style={[
+                styles.integrationStatus,
+                integration.connected && styles.integrationStatusConnected,
+              ]} />
+              <View style={styles.integrationContent}>
+                <Text style={styles.integrationName}>{integration.name}</Text>
+                <Text style={styles.integrationState}>
+                  {integration.connected ? 'Connected' : 'Not configured'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        ))}
       </Card>
 
       {/* Support Section */}
@@ -234,7 +438,7 @@ export default function ProfileScreen() {
           icon="📧"
           label="Contact Support"
           onPress={() =>
-            Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=DealRoom%20Mobile%20Support`)
+            Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=FlipMantis%20Mobile%20Support`)
           }
         />
         <View style={styles.menuDivider} />
@@ -253,7 +457,7 @@ export default function ProfileScreen() {
       </View>
 
       {/* Version */}
-      <Text style={styles.version}>DealRoom Mobile v1.0.0</Text>
+      <Text style={styles.version}>FlipMantis Mobile v1.0.0</Text>
 
       {/* ========== MODALS ========== */}
 
@@ -628,6 +832,198 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.sm,
     fontWeight: typography.fontWeight.medium,
     color: colors.brand[700],
+  },
+  entitlementBadgeFree: {
+    backgroundColor: colors.slate[100],
+  },
+  entitlementTextFree: {
+    color: colors.slate[600],
+  },
+  entitlementArrow: {
+    fontSize: typography.fontSize.lg,
+    color: colors.brand[400],
+    marginLeft: spacing.xs,
+  },
+  // Stats card styles
+  statsCard: {
+    marginBottom: spacing.md,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+  },
+  statItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  statValue: {
+    fontSize: typography.fontSize['2xl'],
+    fontWeight: typography.fontWeight.bold,
+    color: colors.ink,
+  },
+  statValueProfit: {
+    color: colors.success[600],
+  },
+  statLabel: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+    marginTop: 2,
+  },
+  statDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: colors.slate[200],
+  },
+  statsFooter: {
+    borderTopWidth: 1,
+    borderTopColor: colors.slate[100],
+    paddingTop: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  statsFooterText: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[400],
+    textAlign: 'center',
+  },
+  statsEmpty: {
+    textAlign: 'center',
+    color: colors.slate[400],
+    padding: spacing.md,
+  },
+  // Streak card styles
+  streakCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.warning[50],
+    borderWidth: 1,
+    borderColor: colors.warning[200],
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  streakIcon: {
+    fontSize: 28,
+    marginRight: spacing.md,
+  },
+  streakContent: {
+    flex: 1,
+  },
+  streakTitle: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.warning[800],
+  },
+  streakSubtitle: {
+    fontSize: typography.fontSize.sm,
+    color: colors.warning[600],
+    marginTop: 2,
+  },
+  // Recent deals styles
+  recentDealRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.slate[100],
+  },
+  recentDealIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: colors.brand[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+  },
+  recentDealIconText: {
+    fontSize: 16,
+  },
+  recentDealContent: {
+    flex: 1,
+  },
+  recentDealAddress: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.ink,
+  },
+  recentDealStage: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  recentDealArrow: {
+    fontSize: typography.fontSize.xl,
+    color: colors.slate[300],
+  },
+  // Referral card styles
+  referralCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.brand[500],
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    ...shadows.medium,
+  },
+  referralContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  referralIcon: {
+    fontSize: 28,
+    marginRight: spacing.md,
+  },
+  referralText: {
+    flex: 1,
+  },
+  referralTitle: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.white,
+  },
+  referralSubtitle: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[100],
+    marginTop: 2,
+  },
+  referralArrow: {
+    fontSize: typography.fontSize.xl,
+    color: colors.brand[200],
+  },
+  // Integration styles
+  integrationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  integrationStatus: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.slate[300],
+    marginRight: spacing.md,
+  },
+  integrationStatusConnected: {
+    backgroundColor: colors.success[500],
+  },
+  integrationContent: {
+    flex: 1,
+  },
+  integrationName: {
+    fontSize: typography.fontSize.base,
+    color: colors.ink,
+  },
+  integrationState: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    marginTop: 2,
   },
   sectionTitle: {
     fontSize: typography.fontSize.sm,

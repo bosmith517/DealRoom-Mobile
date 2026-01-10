@@ -3,9 +3,11 @@
  *
  * Handles skip trace lookups for owner contact information.
  * Uses BatchData API via Edge Function with caching and usage tracking.
+ * Throws UsageLimitError when trial limits are exceeded.
  */
 
 import { supabase } from '../lib/supabase'
+import { UsageLimitError } from './data'
 
 // ============================================================================
 // Types
@@ -393,7 +395,29 @@ class SkipTraceService {
         }
       }
 
+      // Handle usage limit errors (402 or 429)
       if (!response.ok) {
+        const isLimitError = data.code === 'USAGE_LIMIT_EXCEEDED' ||
+          data.code === 'SKIP_TRACE_LIMIT_REACHED' ||
+          data.code === 'DAILY_LIMIT_EXCEEDED' ||
+          data.code === 'TRIAL_DAILY_LIMIT' ||
+          response.status === 429
+
+        if (isLimitError && data.code) {
+          throw new UsageLimitError({
+            code: data.code,
+            feature: data.feature || 'skip_trace',
+            used: data.used || data.current,
+            dailyUsed: data.dailyUsed,
+            dailyLimit: data.dailyLimit,
+            trialLimit: data.trialLimit,
+            paidLimit: data.paidLimit,
+            costPerUnit: data.costPerUnit,
+            balance: data.balance,
+            message: data.message || data.error || 'Usage limit reached',
+          })
+        }
+
         return {
           success: false,
           error: data.error || `HTTP ${response.status}`,

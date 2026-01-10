@@ -7,7 +7,7 @@
  * - Convert to Deal when ready
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -23,7 +23,7 @@ import {
 import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, radii } from '../src/theme';
-import { SkipTraceButton } from '../src/components';
+import { SkipTraceButton, BatchProgressModal } from '../src/components';
 import {
   getAnalyzeQueue,
   runQuickAnalysis,
@@ -233,6 +233,10 @@ export default function AnalyzeQueueScreen() {
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [batchAnalyzing, setBatchAnalyzing] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
+  const [batchResults, setBatchResults] = useState({ success: 0, fail: 0 });
+  const [batchComplete, setBatchComplete] = useState(false);
+  const [currentItemLabel, setCurrentItemLabel] = useState('');
+  const cancelBatchRef = useRef(false);
 
   const fetchQueue = useCallback(async () => {
     try {
@@ -309,52 +313,80 @@ export default function AnalyzeQueueScreen() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Start Analysis',
-          onPress: async () => {
-            setBatchAnalyzing(true);
-            setBatchProgress({ current: 0, total: queuedItems.length });
-
-            let successCount = 0;
-            let failCount = 0;
-
-            for (let i = 0; i < queuedItems.length; i++) {
-              const item = queuedItems[i];
-              setBatchProgress({ current: i + 1, total: queuedItems.length });
-              setAnalyzingId(item.id);
-
-              try {
-                await runQuickAnalysis(item.lead_id!);
-                successCount++;
-              } catch (error) {
-                console.error(`Analysis failed for ${item.lead_id}:`, error);
-                failCount++;
-              }
-
-              // Small delay between analyses to avoid overwhelming the API
-              if (i < queuedItems.length - 1) {
-                await new Promise((resolve) => setTimeout(resolve, 500));
-              }
-            }
-
-            setAnalyzingId(null);
-            setBatchAnalyzing(false);
-            setBatchProgress({ current: 0, total: 0 });
-
-            // Refresh the queue
-            await fetchQueue();
-
-            // Show results
-            if (failCount === 0) {
-              Alert.alert('Analysis Complete', `Successfully analyzed ${successCount} properties.`);
-            } else {
-              Alert.alert(
-                'Analysis Complete',
-                `Analyzed ${successCount} properties.\n${failCount} failed and can be retried.`
-              );
-            }
-          },
+          onPress: () => startBatchAnalysis(queuedItems),
         },
       ]
     );
+  };
+
+  const startBatchAnalysis = async (queuedItems: AnalyzeQueueItem[]) => {
+    // Reset state
+    cancelBatchRef.current = false;
+    setBatchAnalyzing(true);
+    setBatchComplete(false);
+    setBatchResults({ success: 0, fail: 0 });
+    setBatchProgress({ current: 0, total: queuedItems.length });
+    setCurrentItemLabel('');
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < queuedItems.length; i++) {
+      // Check for cancellation
+      if (cancelBatchRef.current) {
+        break;
+      }
+
+      const item = queuedItems[i];
+      const lead = item.lead;
+      const itemLabel = lead?.address || lead?.city || `Property ${i + 1}`;
+
+      setBatchProgress({ current: i + 1, total: queuedItems.length });
+      setCurrentItemLabel(itemLabel);
+      setAnalyzingId(item.id);
+
+      try {
+        await runQuickAnalysis(item.lead_id!);
+        successCount++;
+        setBatchResults({ success: successCount, fail: failCount });
+      } catch (error) {
+        console.error(`Analysis failed for ${item.lead_id}:`, error);
+        failCount++;
+        setBatchResults({ success: successCount, fail: failCount });
+      }
+
+      // Small delay between analyses to avoid overwhelming the API
+      if (i < queuedItems.length - 1 && !cancelBatchRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
+
+    setAnalyzingId(null);
+    setCurrentItemLabel('');
+
+    // If cancelled, just close the modal
+    if (cancelBatchRef.current) {
+      setBatchAnalyzing(false);
+      setBatchComplete(false);
+      await fetchQueue();
+      return;
+    }
+
+    // Show completion state in modal
+    setBatchComplete(true);
+
+    // Refresh the queue in background
+    fetchQueue();
+  };
+
+  const handleCancelBatch = () => {
+    cancelBatchRef.current = true;
+  };
+
+  const handleDismissBatchModal = () => {
+    setBatchAnalyzing(false);
+    setBatchComplete(false);
+    setBatchProgress({ current: 0, total: 0 });
   };
 
   // Group by priority
@@ -478,6 +510,19 @@ export default function AnalyzeQueueScreen() {
 
         <View style={{ height: 100 }} />
       </ScrollView>
+
+      {/* Batch Analysis Progress Modal */}
+      <BatchProgressModal
+        visible={batchAnalyzing}
+        current={batchProgress.current}
+        total={batchProgress.total}
+        currentItemLabel={currentItemLabel}
+        successCount={batchResults.success}
+        failCount={batchResults.fail}
+        isComplete={batchComplete}
+        onCancel={handleCancelBatch}
+        onDismiss={handleDismissBatchModal}
+      />
     </SafeAreaView>
   );
 }

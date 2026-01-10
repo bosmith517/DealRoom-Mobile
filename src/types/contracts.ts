@@ -1,8 +1,8 @@
 /**
- * DealRoom Contracts - Local Types
+ * FlipMantis Contracts - Local Types
  *
  * These types mirror the shared contracts package.
- * TODO: Replace with @dealroom/contracts when monorepo is set up.
+ * TODO: Replace with @flipmantis/contracts when monorepo is set up.
  */
 
 // ============================================================================
@@ -12,10 +12,14 @@
 // Database stages from dealroom_deals table
 export type DealStage =
   | 'lead'
+  | 'prospect'
+  | 'prospecting'
   | 'researching'
   | 'evaluating'
   | 'analyzing'
+  | 'underwriting'
   | 'offer_pending'
+  | 'offer_submitted'
   | 'under_contract'
   | 'due_diligence'
   | 'closing'
@@ -30,10 +34,14 @@ export interface DealStageConfigItem {
 
 export const DEAL_STAGE_CONFIG: Record<DealStage, DealStageConfigItem> = {
   lead: { label: 'Lead', color: '#94a3b8' },
+  prospect: { label: 'Prospect', color: '#a78bfa' },
+  prospecting: { label: 'Prospecting', color: '#a78bfa' },
   researching: { label: 'Researching', color: '#8b5cf6' },
   evaluating: { label: 'Evaluating', color: '#6366f1' },
   analyzing: { label: 'Analyzing', color: '#60a5fa' },
+  underwriting: { label: 'Underwriting', color: '#3b82f6' },
   offer_pending: { label: 'Offer Pending', color: '#f59e0b' },
+  offer_submitted: { label: 'Offer Submitted', color: '#f97316' },
   under_contract: { label: 'Under Contract', color: '#22c55e' },
   due_diligence: { label: 'Due Diligence', color: '#14b8a6' },
   closing: { label: 'Closing', color: '#0891b2' },
@@ -52,6 +60,35 @@ export type PropertyType =
   | 'other'
 
 export type ExitStrategy = 'flip' | 'brrrr' | 'wholesale' | 'hold' | 'other'
+
+// Contact types - aligned with web's comprehensive list
+export type ContactType =
+  | 'seller'
+  | 'buyer'
+  | 'agent_listing'
+  | 'agent_buyer'
+  | 'wholesaler'
+  | 'lender'
+  | 'hard_money_lender'
+  | 'private_lender'
+  | 'title_company'
+  | 'attorney'
+  | 'contractor'
+  | 'property_manager'
+  | 'jv_partner'
+  | 'bird_dog'
+  | 'tenant'
+  | 'other'
+
+export type ContactStatus =
+  | 'active'
+  | 'inactive'
+  | 'do_not_contact'
+  | 'deceased'
+  | 'bad_data'
+  | 'archived'
+
+export type EngagementLevel = 'hot' | 'warm' | 'cold' | 'dead'
 
 export interface PhotoPrompt {
   key: string
@@ -297,13 +334,13 @@ export interface Followup {
   deal_id?: string
   property_id?: string
   lead_id?: string
-  followup_type: string
+  task_type: string
   title: string
   description?: string
   due_at: string
   remind_at?: string
   assigned_to?: string
-  status: 'open' | 'in_progress' | 'done' | 'snoozed' | 'cancelled'
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'snoozed'
   completed_at?: string
   outcome?: string
   recurring_pattern?: RecurringPattern
@@ -324,6 +361,11 @@ export interface DashboardStats {
 
 export interface DealWithProperty extends Omit<Deal, 'property'> {
   property: Property | null
+  // Additional display/computed fields
+  deal_name?: string
+  contract_price?: number
+  offer_price?: number
+  asking_price?: number
 }
 
 // Lead from driving mode captures
@@ -332,6 +374,7 @@ export interface Lead {
   tenant_id: string
   session_id?: string
   address?: string
+  address_line1?: string
   city?: string
   state?: string
   zip?: string
@@ -340,14 +383,24 @@ export interface Lead {
   tags: string[]
   priority: 'low' | 'normal' | 'high' | 'hot'
   notes?: string
+  capture_notes?: string
+  source?: string
   status: 'active' | 'converted' | 'archived' | 'deleted'
   // Triage status for swipe queue
   triage_status?: 'new' | 'queued' | 'dismissed' | 'watch' | 'deal_created'
   triage_reason?: string
   // Distress scoring
   rank_score?: number
+  lead_score?: number
   distress_signals?: string[]
   last_scored_at?: string
+  // Reach workflow status
+  reach_status?: 'not_started' | 'in_progress' | 'contacted' | 'follow_up' | 'completed' | 'dead'
+  // Skip trace fields
+  skip_trace_id?: string
+  skip_traced_at?: string
+  is_litigator?: boolean
+  litigator_warning?: string
   // Photo from lead capture
   photo_url?: string
   // Ownership

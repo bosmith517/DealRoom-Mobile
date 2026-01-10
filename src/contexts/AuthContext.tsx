@@ -3,6 +3,9 @@
  *
  * Supabase authentication with session persistence.
  * Provides user, tenant_id, entitlements, and auth methods.
+ *
+ * IMPORTANT: Uses the shared Supabase client from lib/supabase.ts
+ * This ensures all parts of the app use the same session.
  */
 
 import React, {
@@ -13,53 +16,25 @@ import React, {
   useCallback,
   ReactNode,
 } from 'react'
-import { createClient, Session, User } from '@supabase/supabase-js'
-import * as SecureStore from 'expo-secure-store'
+import type { Session, User } from '@supabase/supabase-js'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-// Supabase URL and Anon Key (safe to expose)
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://eskpnhbemnxkxafjbbdx.supabase.co'
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || ''
+// Use the SINGLE shared Supabase client - this prevents profile bleed
+// when switching users since all services use the same session
+import { supabase } from '../lib/supabase'
 
-// Custom storage adapter for Supabase that uses SecureStore
-const ExpoSecureStoreAdapter = {
-  getItem: async (key: string): Promise<string | null> => {
-    try {
-      return await SecureStore.getItemAsync(key)
-    } catch {
-      return null
-    }
-  },
-  setItem: async (key: string, value: string): Promise<void> => {
-    try {
-      await SecureStore.setItemAsync(key, value)
-    } catch {
-      // Silently fail - SecureStore has size limits
-    }
-  },
-  removeItem: async (key: string): Promise<void> => {
-    try {
-      await SecureStore.deleteItemAsync(key)
-    } catch {
-      // Silently fail
-    }
-  },
-}
-
-// Initialize Supabase client
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    storage: ExpoSecureStoreAdapter,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-})
+// Re-export for backwards compatibility with files that import from AuthContext
+export { supabase }
 
 // Types
 interface Entitlement {
   app_key: string
   is_enabled: boolean
+  plan_key?: string
+  status?: string
+  current_period_start?: string
+  current_period_end?: string
+  trial_end?: string
   metadata?: Record<string, unknown>
 }
 
@@ -68,7 +43,7 @@ interface AuthState {
   session: Session | null
   tenantId: string | null
   platforms: string[]
-  hasDealroomAccess: boolean
+  hasFlipmantisAccess: boolean
   entitlements: Entitlement[]
   isLoading: boolean
   isAuthenticated: boolean
@@ -100,8 +75,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [entitlements, setEntitlements] = useState<Entitlement[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
-  // Derived state: does user have DealRoom platform access?
-  const hasDealroomAccess = platforms.includes('dealroom')
+  // Derived state: does user have FlipMantis platform access?
+  // Per pricing SSoT, all users (including free tier) have mobile access.
+  // Feature gating (readonly, D4D, etc.) is handled by tier limits, not platform array.
+  // Everyone who authenticates gets access; tier controls what they can do.
+  const hasFlipmantisAccess = true
 
   // Fetch user's tenant, platforms, and entitlements
   const fetchUserData = useCallback(async (userId: string) => {
@@ -126,10 +104,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setTenantId(userTenant.tenant_id)
       setPlatforms(userTenant.platforms || [])
 
-      // Check if user has DealRoom platform access
+      // Check if user has FlipMantis platform access
       const userPlatforms = userTenant.platforms || []
-      if (!userPlatforms.includes('dealroom')) {
-        console.log('User does not have DealRoom platform access')
+      if (!userPlatforms.includes('flipmantis')) {
+        console.log('User does not have FlipMantis platform access')
         // Still set empty entitlements so the app knows access check is complete
         setEntitlements([])
         return
@@ -138,7 +116,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // User has platform access, fetch entitlements for tier/feature info
       const { data: entitlementData, error: entitlementError } = await supabase
         .from('dealroom_tenant_entitlements')
-        .select('app_key, is_enabled, metadata')
+        .select('app_key, is_enabled, plan_key, status, current_period_start, current_period_end, trial_end, metadata')
         .eq('tenant_id', userTenant.tenant_id)
 
       if (entitlementError) {
@@ -146,7 +124,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       } else {
         setEntitlements(entitlementData || [])
         // Cache entitlements in AsyncStorage (fire and forget)
-        AsyncStorage.setItem('@dealroom:cached_entitlements', JSON.stringify(entitlementData)).catch(() => {})
+        AsyncStorage.setItem('@flipmantis:cached_entitlements', JSON.stringify(entitlementData)).catch(() => {})
       }
     } catch (error) {
       console.error('Error fetching user data:', error)
@@ -174,12 +152,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setUser(session?.user ?? null)
 
         if (event === 'SIGNED_IN' && session?.user) {
+          // Force refresh to clear any stale cached user data from previous session
+          // This ensures getUser() calls in services return the new user, not cached old user
+          await supabase.auth.refreshSession()
           await fetchUserData(session.user.id)
         } else if (event === 'SIGNED_OUT') {
+          // Reset all auth state
           setTenantId(null)
           setPlatforms([])
           setEntitlements([])
-          AsyncStorage.removeItem('@dealroom:cached_entitlements').catch(() => {})
+
+          // Clear ALL cached data to prevent profile bleed
+          // This catches server-side session expiry, not just explicit signOut
+          try {
+            const keys = await AsyncStorage.getAllKeys()
+            const flipmantisKeys = keys.filter((key) => key.startsWith('@flipmantis:'))
+            if (flipmantisKeys.length > 0) {
+              await AsyncStorage.multiRemove(flipmantisKeys)
+            }
+            console.log(`[Auth] SIGNED_OUT: Cleared ${flipmantisKeys.length} cached keys`)
+          } catch (err) {
+            console.error('[Auth] Error clearing cached data on SIGNED_OUT:', err)
+          }
         }
       }
     )
@@ -215,9 +209,23 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, [])
 
-  // Sign out
+  // Sign out - CRITICAL: Clear all user data from local storage
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut()
+    // Clear ALL @flipmantis cached data to prevent data leakage between accounts
+    // This is more thorough than listing individual keys
+    try {
+      const keys = await AsyncStorage.getAllKeys()
+      const flipmantisKeys = keys.filter((key) => key.startsWith('@flipmantis:'))
+      if (flipmantisKeys.length > 0) {
+        await AsyncStorage.multiRemove(flipmantisKeys)
+      }
+      console.log(`[Auth] Cleared ${flipmantisKeys.length} cached keys`)
+    } catch (err) {
+      console.error('[Auth] Error clearing cached data:', err)
+    }
+    // Sign out with global scope to ensure complete session invalidation
+    // This clears all sessions including any cached session data in the client
+    await supabase.auth.signOut({ scope: 'global' })
   }, [])
 
   // Refresh entitlements
@@ -241,7 +249,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     session,
     tenantId,
     platforms,
-    hasDealroomAccess,
+    hasFlipmantisAccess,
     entitlements,
     isLoading,
     isAuthenticated: !!session,
@@ -264,10 +272,13 @@ export function useAuth(): AuthContextValue {
   return context
 }
 
-// Convenience hook for checking DealRoom entitlement
-export function useDealRoomEntitlement(): boolean {
+// Convenience hook for checking FlipMantis entitlement
+export function useFlipMantisEntitlement(): boolean {
   const { hasEntitlement, isLoading } = useAuth()
 
   if (isLoading) return false
-  return hasEntitlement('dealroom')
+  return hasEntitlement('flipmantis')
 }
+
+// Legacy alias for backwards compatibility
+export const useDealRoomEntitlement = useFlipMantisEntitlement

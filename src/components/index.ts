@@ -1,5 +1,5 @@
 /**
- * DealRoom Mobile UI Components
+ * FlipMantis Mobile UI Components
  *
  * Export all reusable components from a single entry point.
  */
@@ -25,11 +25,11 @@ export { OfflineBanner } from './OfflineBanner'
 
 // Map
 export {
-  DealRoomMap,
+  FlipMantisMap,
   type MapPin,
   type RoutePoint,
-  type DealRoomMapRef,
-} from './DealRoomMap'
+  type FlipMantisMapRef,
+} from './FlipMantisMap'
 
 // Skip Trace
 export { SkipTraceButton } from './SkipTraceButton'
@@ -40,3 +40,48 @@ export { ReachWorkflow } from './ReachWorkflow'
 export { OutcomeRecorder, type InteractionOutcome } from './OutcomeRecorder'
 export { ActivityTimeline } from './ActivityTimeline'
 export { AIScoreCard } from './AIScoreCard'
+
+// AI/Investor Features
+export { InvestorOnboarding } from './InvestorOnboarding'
+export { BuyBoxTemplateSelector } from './BuyBoxTemplateSelector'
+
+// Intelligence Platform (n8n workflow integration)
+export { MarketAlertBanner } from './MarketAlertBanner'
+export { SellerMotivationCard } from './SellerMotivationCard'
+export { PassDealModal } from './PassDealModal'
+export { OutcomeLogger } from './OutcomeLogger'
+
+// Address Search
+export { AddressAutocomplete, type ParsedAddress } from './AddressAutocomplete'
+
+// Trial/Usage Components
+export { TrialLimitModal, type TrialLimitModalProps } from './TrialLimitModal'
+export { TrialUsageWarning, type TrialUsageWarningProps } from './TrialUsageWarning'
+
+// Dashboard Widgets
+export { GoalTrackingWidget } from './GoalTrackingWidget'
+export { WeekCalendarStrip } from './WeekCalendarStrip'
+export { PipelineHealthGauge } from './PipelineHealthGauge'
+export { QuickWinCard } from './QuickWinCard'
+
+// Leads Components
+export { LeadScoreBar } from './LeadScoreBar'
+
+// Pipeline Components
+export { StuckDealsAlert, type StuckDeal } from './StuckDealsAlert'
+export { DealTimelinePreview } from './DealTimelinePreview'
+
+// Triage Components
+export { SwipeTutorial, shouldShowTutorial, resetTutorial } from './SwipeTutorial'
+
+// Analysis Components
+export { BatchProgressModal } from './BatchProgressModal'
+
+// Saved Search Components
+export { EditSearchModal } from './EditSearchModal'
+
+// Buy Box Components
+export { BuyBoxPreview } from './BuyBoxPreview'
+
+// Alerts Components
+export { AlertSettingsModal, getAlertSettings, type AlertSettings } from './AlertSettingsModal'

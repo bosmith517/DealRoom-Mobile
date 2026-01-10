@@ -16,12 +16,13 @@ import { AuthProvider, useAuth } from '../src/contexts/AuthContext'
 import { OfflineProvider } from '../src/contexts/OfflineContext'
 import { SettingsProvider } from '../src/contexts/SettingsContext'
 import { ThemeProvider, useTheme } from '../src/contexts/ThemeContext'
+import { NotificationProvider } from '../src/contexts/NotificationContext'
 import { colors } from '../src/theme'
 import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native'
 
 // Auth navigation guard
 function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading, hasDealroomAccess, signOut } = useAuth()
+  const { isAuthenticated, isLoading, hasFlipmantisAccess, signOut } = useAuth()
   const segments = useSegments()
   const router = useRouter()
 
@@ -42,15 +43,15 @@ function AuthNavigationGuard({ children }: { children: React.ReactNode }) {
       return
     }
 
-    // Authenticated but no DealRoom platform access
-    if (!hasDealroomAccess) {
+    // Authenticated but no FlipMantis platform access
+    if (!hasFlipmantisAccess) {
       if (!inNoAccess) router.replace('/no-access')
       return
     }
 
     // Authenticated with access - redirect away from auth/no-access screens
     if (inAuthGroup || inNoAccess) router.replace('/(tabs)')
-  }, [isAuthenticated, isLoading, hasDealroomAccess, segments, router])
+  }, [isAuthenticated, isLoading, hasFlipmantisAccess, segments, router])
 
   if (isLoading) {
     return (
@@ -69,16 +70,18 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <AuthProvider>
-          <SettingsProvider>
-            <ThemeProvider>
-              <OfflineProvider>
-                <AuthNavigationGuard>
+          <NotificationProvider>
+            <SettingsProvider>
+              <ThemeProvider>
+                <OfflineProvider>
+                  <AuthNavigationGuard>
                 <StatusBar style="auto" />
               <Stack
               screenOptions={{
                 headerShown: false,
                 contentStyle: { backgroundColor: colors.paper },
                 animation: 'slide_from_right',
+                headerBackTitleVisible: false, // Hide "(tabs)" back button text
               }}
             >
               {/* Auth screens (guest only) */}
@@ -153,16 +156,6 @@ export default function RootLayout() {
                 }}
               />
 
-              {/* Upgrade screen */}
-              <Stack.Screen
-                name="upgrade"
-                options={{
-                  headerShown: true,
-                  title: 'Upgrade',
-                  headerStyle: { backgroundColor: colors.brand[500] },
-                  headerTintColor: colors.white,
-                }}
-              />
 
               {/* No access screen (authenticated but no DealRoom platform access) */}
               <Stack.Screen
@@ -171,11 +164,117 @@ export default function RootLayout() {
                   headerShown: false,
                 }}
               />
+
+              {/* Driving session screen */}
+              <Stack.Screen
+                name="driving"
+                options={{
+                  headerShown: false,
+                  animation: 'slide_from_bottom',
+                }}
+              />
+
+              {/* Triage / Swipe screen */}
+              <Stack.Screen
+                name="triage"
+                options={{
+                  headerShown: true,
+                  title: 'Triage Leads',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Analyze queue screen */}
+              <Stack.Screen
+                name="analyze"
+                options={{
+                  headerShown: true,
+                  title: 'Analyze',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Buy Box configuration screen */}
+              <Stack.Screen
+                name="buybox"
+                options={{
+                  headerShown: false,
+                }}
+              />
+
+              {/* Saved searches screen */}
+              <Stack.Screen
+                name="saved-searches"
+                options={{
+                  headerShown: true,
+                  title: 'Saved Searches',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Tasks screen */}
+              <Stack.Screen
+                name="tasks"
+                options={{
+                  headerShown: true,
+                  title: 'Tasks',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Lead detail screen */}
+              <Stack.Screen
+                name="lead/[id]"
+                options={{
+                  headerShown: true,
+                  title: 'Lead',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* New property screen */}
+              <Stack.Screen
+                name="property/new"
+                options={{
+                  headerShown: true,
+                  title: 'Add Property',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Standalone leads list (outside tabs) */}
+              <Stack.Screen
+                name="leads"
+                options={{
+                  headerShown: true,
+                  title: 'Leads',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
+
+              {/* Market Alerts screen */}
+              <Stack.Screen
+                name="alerts"
+                options={{
+                  headerShown: true,
+                  title: 'Market Alerts',
+                  headerStyle: { backgroundColor: colors.white },
+                  headerTintColor: colors.ink,
+                }}
+              />
             </Stack>
-                </AuthNavigationGuard>
-              </OfflineProvider>
-            </ThemeProvider>
-          </SettingsProvider>
+                  </AuthNavigationGuard>
+                </OfflineProvider>
+              </ThemeProvider>
+            </SettingsProvider>
+          </NotificationProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>

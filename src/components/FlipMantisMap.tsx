@@ -1,5 +1,5 @@
 /**
- * DealRoomMap Component
+ * FlipMantisMap Component
  *
  * Native Mapbox map using @rnmapbox/maps.
  * Requires EAS build (not Expo Go) - uses native modules.
@@ -49,7 +49,7 @@ export interface RoutePoint {
   timestamp?: number
 }
 
-interface DealRoomMapProps {
+interface FlipMantisMapProps {
   // Initial view
   initialCenter?: [number, number] // [lng, lat]
   initialZoom?: number
@@ -87,7 +87,7 @@ const PIN_COLORS: Record<string, string> = {
   current: colors.error[500],
 }
 
-export function DealRoomMap({
+export function FlipMantisMap({
   initialCenter = [-87.6298, 41.8781], // Chicago default
   initialZoom = 12,
   pins = [],
@@ -101,7 +101,7 @@ export function DealRoomMap({
   onRegionChange,
   onLongPress,
   style,
-}: DealRoomMapProps) {
+}: FlipMantisMapProps) {
   const mapRef = useRef<MapView>(null)
   const cameraRef = useRef<Camera>(null)
   const [isReady, setIsReady] = useState(false)
@@ -294,7 +294,7 @@ export function DealRoomMap({
 }
 
 // Imperative methods exposed via ref
-export interface DealRoomMapRef {
+export interface FlipMantisMapRef {
   flyTo: (coords: { lat: number; lng: number }, zoom?: number) => void
   zoomIn: () => void
   zoomOut: () => void
@@ -359,4 +359,4 @@ const styles = StyleSheet.create({
   },
 })
 
-export default DealRoomMap
+export default FlipMantisMap

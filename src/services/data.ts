@@ -18,6 +18,60 @@ import type {
   Lead,
 } from '../types'
 
+// ============================================================================
+// Usage Limit Error (preserves rich data from Edge Functions)
+// ============================================================================
+
+export interface UsageLimitErrorData {
+  code: string
+  feature?: string
+  used?: number
+  dailyUsed?: number
+  dailyLimit?: number
+  trialLimit?: number
+  paidLimit?: number
+  costPerUnit?: number
+  balance?: number
+  message: string
+}
+
+export class UsageLimitError extends Error {
+  code: string
+  feature?: string
+  used?: number
+  dailyUsed?: number
+  dailyLimit?: number
+  trialLimit?: number
+  paidLimit?: number
+  costPerUnit?: number
+  balance?: number
+
+  constructor(data: UsageLimitErrorData) {
+    super(data.message)
+    this.name = 'UsageLimitError'
+    this.code = data.code
+    this.feature = data.feature
+    this.used = data.used
+    this.dailyUsed = data.dailyUsed
+    this.dailyLimit = data.dailyLimit
+    this.trialLimit = data.trialLimit
+    this.paidLimit = data.paidLimit
+    this.costPerUnit = data.costPerUnit
+    this.balance = data.balance
+  }
+
+  get isDailyLimit(): boolean {
+    return this.code === 'DAILY_LIMIT_EXCEEDED' || this.code === 'TRIAL_DAILY_LIMIT'
+  }
+
+  get isUsageLimit(): boolean {
+    return this.code === 'USAGE_LIMIT_EXCEEDED' ||
+      this.code === 'SEARCH_LIMIT_REACHED' ||
+      this.code === 'SKIP_TRACE_LIMIT_REACHED' ||
+      this.isDailyLimit
+  }
+}
+
 // Google Maps API key for Street View
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''
 
@@ -61,6 +115,7 @@ export async function getDeals(options?: {
   search?: string
   limit?: number
   offset?: number
+  pipeline_id?: string
 }): Promise<{ data: DealWithProperty[]; error: Error | null }> {
   try {
     // Query deals and join properties via deal_id FK on properties table
@@ -71,6 +126,10 @@ export async function getDeals(options?: {
         property:dealroom_properties!deal_id(*)
       `)
       .order('created_at', { ascending: false })
+
+    if (options?.pipeline_id) {
+      query = query.eq('pipeline_id', options.pipeline_id)
+    }
 
     if (options?.stage) {
       query = query.eq('stage', options.stage)
@@ -619,7 +678,7 @@ export async function getUpcomingFollowups(limit = 10): Promise<{ data: Followup
     const { data, error } = await supabase
       .from('dealroom_followups')
       .select('*')
-      .in('status', ['open', 'in_progress'])
+      .in('status', ['pending', 'in_progress'])
       .gte('due_at', new Date().toISOString())
       .order('due_at', { ascending: true })
       .limit(limit)
@@ -638,7 +697,7 @@ export async function getOverdueFollowups(): Promise<{ data: Followup[]; error: 
     const { data, error } = await supabase
       .from('dealroom_followups')
       .select('*')
-      .in('status', ['open', 'in_progress'])
+      .in('status', ['pending', 'in_progress'])
       .lt('due_at', new Date().toISOString())
       .order('due_at', { ascending: true })
 
@@ -660,7 +719,7 @@ export async function getTodayFollowups(): Promise<{ data: Followup[]; error: Er
     const { data, error } = await supabase
       .from('dealroom_followups')
       .select('*')
-      .in('status', ['open', 'in_progress'])
+      .in('status', ['pending', 'in_progress'])
       .gte('due_at', startOfDay)
       .lt('due_at', endOfDay)
       .order('due_at', { ascending: true })
@@ -710,13 +769,13 @@ export async function createFollowup(followup: Partial<Followup>): Promise<{ dat
       .insert({
         title: followup.title,
         description: followup.description,
-        followup_type: followup.followup_type || 'task',
+        task_type: followup.task_type || 'follow_up',
         due_at: followup.due_at,
         remind_at: followup.remind_at,
         deal_id: followup.deal_id,
         lead_id: followup.lead_id,
         recurring_pattern: followup.recurring_pattern || 'none',
-        status: 'open',
+        status: 'pending',
       })
       .select()
       .single()
@@ -792,7 +851,7 @@ export async function completeFollowup(
     const { data, error } = await supabase
       .from('dealroom_followups')
       .update({
-        status: 'done',
+        status: 'completed',
         completed_at: new Date().toISOString(),
         outcome,
         updated_at: new Date().toISOString(),
@@ -813,13 +872,13 @@ export async function completeFollowup(
         .insert({
           title: existing.title,
           description: existing.description,
-          followup_type: existing.followup_type,
+          task_type: existing.task_type,
           due_at: nextDueDate.toISOString(),
           deal_id: existing.deal_id,
           lead_id: existing.lead_id,
           recurring_pattern: existing.recurring_pattern,
           parent_followup_id: existing.parent_followup_id || id,
-          status: 'open',
+          status: 'pending',
         })
         .select()
         .single()
@@ -869,7 +928,7 @@ export async function snoozeFollowup(
     // Reopen after snooze update
     const { data: reopened, error: reopenError } = await supabase
       .from('dealroom_followups')
-      .update({ status: 'open' })
+      .update({ status: 'pending' })
       .eq('id', id)
       .select()
       .single()
@@ -925,6 +984,29 @@ export async function searchProperty(
     const result = await response.json()
 
     if (!response.ok) {
+      // Check if this is a usage limit error (402 or 429)
+      const isLimitError = result.code === 'USAGE_LIMIT_EXCEEDED' ||
+        result.code === 'SEARCH_LIMIT_REACHED' ||
+        result.code === 'DAILY_LIMIT_EXCEEDED' ||
+        result.code === 'TRIAL_DAILY_LIMIT' ||
+        response.status === 402 ||
+        response.status === 429
+
+      if (isLimitError && result.code) {
+        throw new UsageLimitError({
+          code: result.code,
+          feature: result.feature || 'property_search',
+          used: result.used || result.current,
+          dailyUsed: result.dailyUsed,
+          dailyLimit: result.dailyLimit,
+          trialLimit: result.trialLimit,
+          paidLimit: result.paidLimit,
+          costPerUnit: result.costPerUnit,
+          balance: result.balance,
+          message: result.message || result.error || 'Usage limit reached',
+        })
+      }
+
       throw new Error(result.error || 'Property search failed')
     }
 
@@ -1051,21 +1133,99 @@ export interface TriageLead extends Lead {
   distress_signals?: string[]
 }
 
+// Triage channel types for filtering leads by source
+export type TriageChannel = 'all' | 'driving' | 'list_import' | 'distress' | 'watch_list' | 'manual'
+
+export interface TriageChannelCount {
+  channel: TriageChannel
+  label: string
+  icon: string
+  count: number
+}
+
+/**
+ * Get counts for each triage channel
+ */
+export async function getTriageChannelCounts(): Promise<TriageChannelCount[]> {
+  try {
+    // Get all leads that need triage
+    const { data, error } = await supabase
+      .from('dealroom_leads')
+      .select('id, source, triage_status')
+      .in('triage_status', ['new', 'watch'])
+      .neq('status', 'converted')
+
+    if (error) throw error
+
+    const leads = data || []
+
+    // Count by source
+    const drivingCount = leads.filter(l => l.source === 'driving').length
+    const listCount = leads.filter(l => l.source === 'list_import' || l.source === 'list').length
+    const distressCount = leads.filter(l => l.source === 'distress_alert' || l.source === 'alert').length
+    const watchCount = leads.filter(l => l.triage_status === 'watch').length
+    const manualCount = leads.filter(l => l.source === 'manual').length
+    const allCount = leads.length
+
+    return [
+      { channel: 'all', label: 'All Leads', icon: '📥', count: allCount },
+      { channel: 'driving', label: 'Driving', icon: '🚗', count: drivingCount },
+      { channel: 'list_import', label: 'Lists', icon: '📋', count: listCount },
+      { channel: 'distress', label: 'Distress', icon: '🚨', count: distressCount },
+      { channel: 'watch_list', label: 'Watch List', icon: '👀', count: watchCount },
+      { channel: 'manual', label: 'Manual', icon: '✏️', count: manualCount },
+    ]
+  } catch (err) {
+    console.error('Error getting triage channel counts:', err)
+    return [
+      { channel: 'all', label: 'All Leads', icon: '📥', count: 0 },
+      { channel: 'driving', label: 'Driving', icon: '🚗', count: 0 },
+      { channel: 'list_import', label: 'Lists', icon: '📋', count: 0 },
+      { channel: 'distress', label: 'Distress', icon: '🚨', count: 0 },
+      { channel: 'watch_list', label: 'Watch List', icon: '👀', count: 0 },
+      { channel: 'manual', label: 'Manual', icon: '✏️', count: 0 },
+    ]
+  }
+}
+
 export async function getTriageLeads(options?: {
   limit?: number
+  channel?: TriageChannel
 }): Promise<TriageLead[]> {
   try {
     // Get leads that need triage (new status, not dismissed, not converted)
     // Join tags table to hydrate tags array
-    const { data, error } = await supabase
+    let query = supabase
       .from('dealroom_leads')
       .select(`
         *,
         media:dealroom_lead_media(storage_path),
         lead_tags:dealroom_lead_tags(tag_key, tag_label)
       `)
-      .in('triage_status', ['new', 'watch'])
       .neq('status', 'converted')
+
+    // Apply channel filter
+    const channel = options?.channel || 'all'
+    if (channel === 'driving') {
+      query = query.eq('source', 'driving')
+      query = query.in('triage_status', ['new', 'watch'])
+    } else if (channel === 'list_import') {
+      query = query.in('source', ['list_import', 'list'])
+      query = query.in('triage_status', ['new', 'watch'])
+    } else if (channel === 'distress') {
+      query = query.in('source', ['distress_alert', 'alert'])
+      query = query.in('triage_status', ['new', 'watch'])
+    } else if (channel === 'watch_list') {
+      query = query.eq('triage_status', 'watch')
+    } else if (channel === 'manual') {
+      query = query.eq('source', 'manual')
+      query = query.in('triage_status', ['new', 'watch'])
+    } else {
+      // All leads
+      query = query.in('triage_status', ['new', 'watch'])
+    }
+
+    const { data, error } = await query
       .order('rank_score', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(options?.limit || 50)
@@ -1103,7 +1263,7 @@ export async function getTriageLeads(options?: {
 
 function getStorageUrl(path: string): string {
   const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || ''
-  return `${supabaseUrl}/storage/v1/object/public/dealroom-media/${path}`
+  return `${supabaseUrl}/storage/v1/object/public/flipmantis-media/${path}`
 }
 
 export interface SwipeResult {
@@ -1140,6 +1300,38 @@ export async function handleSwipeAction(
   } catch (err) {
     console.error('Error handling swipe:', err)
     throw err
+  }
+}
+
+/**
+ * Undo a swipe action - restore lead to 'new' triage status
+ * Used for the floating undo button in triage screen
+ */
+export async function undoSwipeAction(
+  leadId: string,
+  previousState: {
+    triage_status: string
+    priority: string
+    dismiss_reason?: string | null
+  }
+): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('dealroom_leads')
+      .update({
+        triage_status: previousState.triage_status || 'new',
+        priority: previousState.priority || 'normal',
+        dismiss_reason: previousState.dismiss_reason || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', leadId)
+
+    if (error) throw error
+
+    return true
+  } catch (err) {
+    console.error('Error undoing swipe:', err)
+    return false
   }
 }
 
@@ -2407,7 +2599,9 @@ export const dataService = {
 
   // Triage
   getTriageLeads,
+  getTriageChannelCounts,
   handleSwipeAction,
+  undoSwipeAction,
   getHotLeads,
   markLeadAsHot,
 

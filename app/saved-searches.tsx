@@ -17,14 +17,20 @@ import {
   TextInput,
   ScrollView,
   ActivityIndicator,
+  Share,
+  Platform,
 } from 'react-native'
+import * as FileSystem from 'expo-file-system'
+import * as Sharing from 'expo-sharing'
 import { Stack, useRouter } from 'expo-router'
-import { ScreenContainer, Card, Button } from '../src/components'
+import { ScreenContainer, Card, Button, EditSearchModal } from '../src/components'
 import { colors, spacing, typography, radii } from '../src/theme'
 import {
   getSavedSearches,
   deleteSavedSearch,
   runSavedSearch,
+  updateSavedSearch,
+  createSavedSearch,
   type SavedSearch,
 } from '../src/services'
 
@@ -49,13 +55,23 @@ function formatDate(dateString?: string): string {
 function SearchCard({
   search,
   onRun,
+  onEdit,
+  onDuplicate,
   onDelete,
+  onExport,
+  onShare,
   isRunning,
+  isExporting,
 }: {
   search: SavedSearch
   onRun: () => void
+  onEdit: () => void
+  onDuplicate: () => void
   onDelete: () => void
+  onExport: () => void
+  onShare: () => void
   isRunning: boolean
+  isExporting: boolean
 }) {
   const filterSummary = []
   if (search.filters.query) filterSummary.push(`"${search.filters.query}"`)
@@ -117,10 +133,39 @@ function SearchCard({
       {/* Actions */}
       <View style={styles.actionRow}>
         <TouchableOpacity
-          style={styles.deleteButton}
+          style={styles.iconButton}
+          onPress={onEdit}
+        >
+          <Text style={styles.iconButtonIcon}>✏️</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={onDuplicate}
+        >
+          <Text style={styles.iconButtonIcon}>📋</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.iconButton, isExporting && styles.iconButtonDisabled]}
+          onPress={onExport}
+          disabled={isExporting}
+        >
+          {isExporting ? (
+            <ActivityIndicator size="small" color={colors.slate[600]} />
+          ) : (
+            <Text style={styles.iconButtonIcon}>📊</Text>
+          )}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={onShare}
+        >
+          <Text style={styles.iconButtonIcon}>📤</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.iconButton}
           onPress={onDelete}
         >
-          <Text style={styles.deleteButtonText}>Delete</Text>
+          <Text style={styles.iconButtonIcon}>🗑️</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.runButton, isRunning && styles.runButtonDisabled]}
@@ -144,6 +189,9 @@ export default function SavedSearchesScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
+  const [exportingId, setExportingId] = useState<string | null>(null)
+  const [editingSearch, setEditingSearch] = useState<SavedSearch | null>(null)
+  const [showEditModal, setShowEditModal] = useState(false)
 
   const loadSearches = useCallback(async () => {
     try {
@@ -220,6 +268,145 @@ export default function SavedSearchesScreen() {
     )
   }, [])
 
+  const handleEdit = useCallback((search: SavedSearch) => {
+    setEditingSearch(search)
+    setShowEditModal(true)
+  }, [])
+
+  const handleDuplicate = useCallback(async (search: SavedSearch) => {
+    try {
+      const duplicated = await createSavedSearch({
+        name: `${search.name} (Copy)`,
+        description: search.description,
+        filters: search.filters,
+        auto_run_enabled: false, // Don't auto-run duplicates by default
+      })
+
+      if (duplicated) {
+        setSearches((prev) => [duplicated, ...prev])
+        Alert.alert('Success', `Created "${duplicated.name}"`)
+      } else {
+        Alert.alert('Error', 'Failed to duplicate search')
+      }
+    } catch (err) {
+      console.error('Error duplicating search:', err)
+      Alert.alert('Error', 'Failed to duplicate search')
+    }
+  }, [])
+
+  // Export search results to CSV file
+  const handleExport = useCallback(async (search: SavedSearch) => {
+    setExportingId(search.id)
+    try {
+      // First run the search to get results
+      const result = await runSavedSearch(search.id)
+      if (!result || !result.leads || result.leads.length === 0) {
+        Alert.alert('No Results', 'Run the search first to generate results for export.')
+        return
+      }
+
+      // Generate CSV content
+      const headers = ['Address', 'City', 'State', 'ZIP', 'Status', 'Score', 'Created']
+      const rows = result.leads.map((lead: any) => [
+        lead.address_line1 || '',
+        lead.city || '',
+        lead.state || '',
+        lead.zip || '',
+        lead.status || '',
+        lead.rank_score || '',
+        lead.created_at ? new Date(lead.created_at).toLocaleDateString() : '',
+      ])
+
+      const csvContent = [
+        headers.join(','),
+        ...rows.map((row: string[]) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+      ].join('\n')
+
+      // Save to file
+      const fileName = `${search.name.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.csv`
+      const filePath = `${FileSystem.documentDirectory}${fileName}`
+      await FileSystem.writeAsStringAsync(filePath, csvContent, {
+        encoding: FileSystem.EncodingType.UTF8,
+      })
+
+      // Check if sharing is available and share the file
+      const sharingAvailable = await Sharing.isAvailableAsync()
+      if (sharingAvailable) {
+        await Sharing.shareAsync(filePath, {
+          mimeType: 'text/csv',
+          dialogTitle: `Export: ${search.name}`,
+          UTI: 'public.comma-separated-values-text',
+        })
+      } else {
+        Alert.alert('Export Complete', `CSV saved with ${result.leads.length} results.\n\nFile: ${fileName}`)
+      }
+
+      // Refresh to update stats
+      loadSearches()
+    } catch (err) {
+      console.error('Error exporting search:', err)
+      Alert.alert('Export Failed', 'Could not export search results.')
+    } finally {
+      setExportingId(null)
+    }
+  }, [loadSearches])
+
+  // Share search configuration (filters) via native share
+  const handleShare = useCallback(async (search: SavedSearch) => {
+    try {
+      // Build a human-readable summary of the search
+      const filterLines: string[] = []
+      if (search.filters.query) filterLines.push(`Keywords: "${search.filters.query}"`)
+      if (search.filters.stage) filterLines.push(`Stage: ${search.filters.stage}`)
+      if (search.filters.zip_codes?.length) filterLines.push(`ZIP Codes: ${search.filters.zip_codes.join(', ')}`)
+      if (search.filters.distress_signals?.length) filterLines.push(`Distress Signals: ${search.filters.distress_signals.join(', ')}`)
+      if (search.filters.min_price) filterLines.push(`Min Price: $${search.filters.min_price.toLocaleString()}`)
+      if (search.filters.max_price) filterLines.push(`Max Price: $${search.filters.max_price.toLocaleString()}`)
+
+      const shareMessage = [
+        `FlipMantis Saved Search: ${search.name}`,
+        search.description ? `\n${search.description}` : '',
+        '\nFilters:',
+        filterLines.length > 0 ? filterLines.join('\n') : 'No filters set',
+        `\nLast run: ${formatDate(search.last_run_at)}`,
+        search.last_result_count != null ? `Results: ${search.last_result_count}` : '',
+      ].filter(Boolean).join('\n')
+
+      await Share.share({
+        message: shareMessage,
+        title: `Search: ${search.name}`,
+      })
+    } catch (err) {
+      if ((err as Error).message !== 'User did not share') {
+        console.error('Error sharing search:', err)
+        Alert.alert('Share Failed', 'Could not share search.')
+      }
+    }
+  }, [])
+
+  const handleSaveEdit = useCallback(async (updates: Partial<SavedSearch>): Promise<boolean> => {
+    if (!editingSearch) return false
+
+    try {
+      const updated = await updateSavedSearch(editingSearch.id, updates)
+      if (updated) {
+        setSearches((prev) =>
+          prev.map((s) => (s.id === editingSearch.id ? updated : s))
+        )
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('Error saving search:', err)
+      return false
+    }
+  }, [editingSearch])
+
+  const handleCloseEditModal = useCallback(() => {
+    setShowEditModal(false)
+    setEditingSearch(null)
+  }, [])
+
   if (loading) {
     return (
       <>
@@ -280,12 +467,25 @@ export default function SavedSearchesScreen() {
               <SearchCard
                 search={item}
                 onRun={() => handleRun(item)}
+                onEdit={() => handleEdit(item)}
+                onDuplicate={() => handleDuplicate(item)}
                 onDelete={() => handleDelete(item)}
+                onExport={() => handleExport(item)}
+                onShare={() => handleShare(item)}
                 isRunning={runningId === item.id}
+                isExporting={exportingId === item.id}
               />
             )}
           />
         )}
+
+        {/* Edit Search Modal */}
+        <EditSearchModal
+          visible={showEditModal}
+          search={editingSearch}
+          onSave={handleSaveEdit}
+          onClose={handleCloseEditModal}
+        />
       </ScreenContainer>
     </>
   )
@@ -374,24 +574,25 @@ const styles = StyleSheet.create({
   },
   actionRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.sm,
   },
-  deleteButton: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    alignItems: 'center',
+  iconButton: {
+    width: 40,
+    height: 40,
     borderRadius: radii.md,
-    borderWidth: 1,
-    borderColor: colors.error[200],
-    backgroundColor: colors.error[50],
+    backgroundColor: colors.slate[100],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  deleteButtonText: {
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.medium,
-    color: colors.error[600],
+  iconButtonDisabled: {
+    opacity: 0.6,
+  },
+  iconButtonIcon: {
+    fontSize: 16,
   },
   runButton: {
-    flex: 2,
+    flex: 1,
     paddingVertical: spacing.sm,
     alignItems: 'center',
     borderRadius: radii.md,

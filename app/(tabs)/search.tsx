@@ -17,13 +17,17 @@ import {
   TextInput,
   Pressable,
   Modal,
+  Linking,
 } from 'react-native'
 import { useRouter, Link } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { Card, Button, Input } from '../../src/components'
+import * as Haptics from 'expo-haptics'
+import { Card, Button, Input, AddressAutocomplete, TrialLimitModal, MarketAlertBanner, FlipMantisMap, type ParsedAddress, type MapPin } from '../../src/components'
 import { colors, spacing, typography, radii, shadows } from '../../src/theme'
-import { getDeals, getLeads, searchProperty, createDealFromProperty, createSavedSearch } from '../../src/services'
+import { getDeals, getLeads, searchProperty, createDealFromProperty, createSavedSearch, UsageLimitError, attomService } from '../../src/services'
+import type { ComparableSale } from '../../src/types/attom'
+import { useSearchHistoryStore, type RecentSearch } from '../../src/stores'
 import type { Lead } from '../../src/types'
 import { DEAL_STAGE_CONFIG } from '../../src/types'
 import type { DealWithProperty, DealStage } from '../../src/types'
@@ -94,7 +98,7 @@ function DistressedLeadCard({ lead }: { lead: Lead }) {
           )}
 
           {/* Reach Status */}
-          {lead.reach_status && lead.reach_status !== 'new' && (
+          {lead.reach_status && lead.reach_status !== 'not_started' && (
             <View style={styles.reachStatusRow}>
               <Ionicons name="radio-outline" size={12} color={colors.brand[500]} />
               <Text style={styles.reachStatusText}>
@@ -156,6 +160,39 @@ function PropertyCard({
   const valuation = property.valuation || {}
   const sale = property.saleHistory || {}
 
+  // Comps state
+  const [showComps, setShowComps] = useState(false)
+  const [comps, setComps] = useState<ComparableSale[]>([])
+  const [compsLoading, setCompsLoading] = useState(false)
+  const [arvAnalysis, setArvAnalysis] = useState<{
+    arv: number
+    medianPrice: number
+    avgPricePerSqft: number
+    confidence: string
+  } | null>(null)
+
+  // Fetch comps when expanded
+  const handleToggleComps = useCallback(async () => {
+    if (!showComps && comps.length === 0 && property.identifier?.attomId) {
+      setCompsLoading(true)
+      try {
+        const result = await attomService.getComparablesWithARV(property.identifier.attomId)
+        if (result.success && result.data) {
+          setComps(result.data.comparables || [])
+          if (result.data.arvAnalysis) {
+            setArvAnalysis(result.data.arvAnalysis)
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching comps:', err)
+      } finally {
+        setCompsLoading(false)
+      }
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    setShowComps(!showComps)
+  }, [showComps, comps.length, property.identifier?.attomId])
+
   return (
     <Card style={styles.propertyCard} padding="md">
       <Text style={styles.propertyAddress}>{loc.address || 'Unknown Address'}</Text>
@@ -213,6 +250,183 @@ function PropertyCard({
         </View>
       )}
 
+      {/* Owner Contact Info (if skip traced) */}
+      {(property.ownership?.phone || property.ownership?.email || property.contacts?.length > 0) && (
+        <View style={styles.contactInfoSection}>
+          <Text style={styles.contactInfoLabel}>Contact Info</Text>
+          {/* Primary contact from ownership */}
+          {property.ownership?.phone && (
+            <View style={styles.contactRow}>
+              <View style={styles.contactInfo}>
+                <Text style={styles.contactIcon}>📞</Text>
+                <Text style={styles.contactText}>{property.ownership.phone}</Text>
+              </View>
+              <View style={styles.contactActions}>
+                <TouchableOpacity
+                  style={styles.contactButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                    Linking.openURL(`tel:${property.ownership.phone}`)
+                  }}
+                >
+                  <Text style={styles.contactButtonText}>Call</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.contactButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                    Linking.openURL(`sms:${property.ownership.phone}`)
+                  }}
+                >
+                  <Text style={styles.contactButtonText}>Text</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+          {property.ownership?.email && (
+            <View style={styles.contactRow}>
+              <View style={styles.contactInfo}>
+                <Text style={styles.contactIcon}>✉️</Text>
+                <Text style={styles.contactText} numberOfLines={1}>{property.ownership.email}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.contactButton}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                  Linking.openURL(`mailto:${property.ownership.email}`)
+                }}
+              >
+                <Text style={styles.contactButtonText}>Email</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {/* Additional contacts from skip trace */}
+          {property.contacts?.slice(0, 2).map((contact: any, idx: number) => (
+            <View key={idx} style={styles.contactRow}>
+              <View style={styles.contactInfo}>
+                <Text style={styles.contactIcon}>{contact.phone ? '📞' : '✉️'}</Text>
+                <Text style={styles.contactText} numberOfLines={1}>
+                  {contact.phone || contact.email}
+                </Text>
+              </View>
+              {contact.phone && (
+                <View style={styles.contactActions}>
+                  <TouchableOpacity
+                    style={styles.contactButton}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      Linking.openURL(`tel:${contact.phone}`)
+                    }}
+                  >
+                    <Text style={styles.contactButtonText}>Call</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.contactButton}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                      Linking.openURL(`sms:${contact.phone}`)
+                    }}
+                  >
+                    <Text style={styles.contactButtonText}>Text</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {contact.email && !contact.phone && (
+                <TouchableOpacity
+                  style={styles.contactButton}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                    Linking.openURL(`mailto:${contact.email}`)
+                  }}
+                >
+                  <Text style={styles.contactButtonText}>Email</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Comps Preview Section */}
+      {property.identifier?.attomId && (
+        <View style={styles.compsSection}>
+          <TouchableOpacity
+            style={styles.compsToggle}
+            onPress={handleToggleComps}
+            activeOpacity={0.7}
+          >
+            <View style={styles.compsToggleLeft}>
+              <Text style={styles.compsToggleIcon}>📊</Text>
+              <Text style={styles.compsToggleText}>
+                {showComps ? 'Hide Comparables' : 'View Comparables'}
+              </Text>
+            </View>
+            <Text style={styles.compsToggleArrow}>{showComps ? '▼' : '▶'}</Text>
+          </TouchableOpacity>
+
+          {showComps && (
+            <View style={styles.compsContent}>
+              {compsLoading ? (
+                <View style={styles.compsLoading}>
+                  <ActivityIndicator size="small" color={colors.brand[500]} />
+                  <Text style={styles.compsLoadingText}>Loading comps...</Text>
+                </View>
+              ) : comps.length > 0 ? (
+                <>
+                  {/* ARV Analysis Summary */}
+                  {arvAnalysis && (
+                    <View style={styles.arvSummary}>
+                      <View style={styles.arvItem}>
+                        <Text style={styles.arvLabel}>Est. ARV</Text>
+                        <Text style={styles.arvValue}>${arvAnalysis.arv.toLocaleString()}</Text>
+                      </View>
+                      <View style={styles.arvItem}>
+                        <Text style={styles.arvLabel}>$/SqFt</Text>
+                        <Text style={styles.arvValue}>${arvAnalysis.avgPricePerSqft}</Text>
+                      </View>
+                      <View style={[
+                        styles.confidenceBadge,
+                        arvAnalysis.confidence === 'high' ? styles.confidenceHigh :
+                        arvAnalysis.confidence === 'medium' ? styles.confidenceMedium : styles.confidenceLow
+                      ]}>
+                        <Text style={styles.confidenceText}>{arvAnalysis.confidence}</Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Comps List */}
+                  {comps.slice(0, 3).map((comp, idx) => (
+                    <View key={comp.attomId || idx} style={styles.compCard}>
+                      <View style={styles.compHeader}>
+                        <Text style={styles.compAddress} numberOfLines={1}>{comp.address}</Text>
+                        <Text style={styles.compDistance}>{comp.distance.toFixed(1)} mi</Text>
+                      </View>
+                      <View style={styles.compDetails}>
+                        <Text style={styles.compPrice}>${comp.salePrice.toLocaleString()}</Text>
+                        <Text style={styles.compMeta}>
+                          {comp.bedrooms}bd/{comp.bathrooms}ba • {comp.sqft.toLocaleString()} sqft
+                        </Text>
+                      </View>
+                      <Text style={styles.compDate}>
+                        Sold {comp.daysAgo} days ago • ${comp.pricePerSqft}/sqft
+                      </Text>
+                    </View>
+                  ))}
+
+                  {comps.length > 3 && (
+                    <Text style={styles.compsMoreText}>
+                      +{comps.length - 3} more comparables
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Text style={styles.compsEmptyText}>No comparable sales found nearby</Text>
+              )}
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Action Buttons - View Details is primary, Add to Pipeline is secondary */}
       <View style={styles.actionButtonsRow}>
         <Button
@@ -240,6 +454,9 @@ export default function SearchScreen() {
   const [activeTab, setActiveTab] = useState<SearchTab>('deals')
   const searchInputRef = useRef<TextInput>(null)
 
+  // Search history store
+  const { recentSearches, addSearch, removeSearch, clearHistory } = useSearchHistoryStore()
+
   // Deal search state
   const [dealQuery, setDealQuery] = useState('')
   const [stageFilter, setStageFilter] = useState<DealStage | 'all'>('all')
@@ -261,11 +478,25 @@ export default function SearchScreen() {
   const [searchingProperty, setSearchingProperty] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [propertyViewMode, setPropertyViewMode] = useState<'list' | 'map'>('list')
 
   // Save search modal state
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [saveSearchName, setSaveSearchName] = useState('')
   const [savingSearch, setSavingSearch] = useState(false)
+
+  // Trial limit modal state
+  const [showTrialLimitModal, setShowTrialLimitModal] = useState(false)
+  const [trialLimitData, setTrialLimitData] = useState<{
+    feature: 'property_search' | 'skip_trace'
+    used: number
+    trialLimit: number
+    paidLimit: number
+    costPerUnit: number
+    dailyUsed?: number
+    dailyLimit?: number
+    isDailyLimit: boolean
+  } | null>(null)
 
   // Handle save search
   const handleSaveSearch = useCallback(async () => {
@@ -413,9 +644,36 @@ export default function SearchScreen() {
         cacheId: data.cacheId,
         cached: data.cached || false,
       })
+
+      // Save to recent searches
+      addSearch({
+        address: address.trim(),
+        city: city.trim() || undefined,
+        state: state.trim() || undefined,
+        zip: data.property?.location?.zipCode || undefined,
+      })
     } catch (err) {
       console.error('Property search error:', err)
-      setError('Search failed. Please try again.')
+
+      // Check if this is a usage limit error
+      if (err instanceof UsageLimitError) {
+        setTrialLimitData({
+          feature: 'property_search',
+          used: err.used || 0,
+          trialLimit: err.trialLimit || 50,
+          paidLimit: err.paidLimit || -1,
+          costPerUnit: err.costPerUnit || 0.25,
+          dailyUsed: err.dailyUsed,
+          dailyLimit: err.dailyLimit,
+          isDailyLimit: err.isDailyLimit,
+        })
+        setShowTrialLimitModal(true)
+        setError(err.isDailyLimit
+          ? 'Daily search limit reached'
+          : 'Search limit reached')
+      } else {
+        setError('Search failed. Please try again.')
+      }
     } finally {
       setSearchingProperty(false)
     }
@@ -458,6 +716,16 @@ export default function SearchScreen() {
       setCreating(false)
     }
   }, [propertyResult, router])
+
+  // Use a recent search
+  const handleUseRecentSearch = useCallback((search: RecentSearch) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+    setAddress(search.address)
+    setCity(search.city || '')
+    setState(search.state || '')
+    // Auto-search after a brief delay
+    setTimeout(() => handleSearchProperty(), 100)
+  }, [handleSearchProperty])
 
   // View property details without creating a deal (like web app)
   const handleViewDetails = useCallback(() => {
@@ -704,49 +972,82 @@ export default function SearchScreen() {
         {/* Property Lookup Tab */}
         {activeTab === 'property' && (
           <View style={styles.tabContent}>
+            {/* Market Alerts Banner */}
+            <View style={styles.marketAlertContainer}>
+              <MarketAlertBanner maxAlerts={3} autoRotate rotateInterval={5000} />
+            </View>
+
+            {/* Recent Searches */}
+            {recentSearches.length > 0 && !propertyResult && (
+              <View style={styles.recentSearchesContainer}>
+                <View style={styles.recentSearchesHeader}>
+                  <Text style={styles.recentSearchesTitle}>Recent Searches</Text>
+                  <TouchableOpacity onPress={clearHistory}>
+                    <Text style={styles.recentSearchesClear}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.recentSearchesScroll}
+                >
+                  {recentSearches.map((search) => (
+                    <TouchableOpacity
+                      key={search.id}
+                      style={styles.recentSearchChip}
+                      onPress={() => handleUseRecentSearch(search)}
+                    >
+                      <Text style={styles.recentSearchIcon}>📍</Text>
+                      <View style={styles.recentSearchContent}>
+                        <Text style={styles.recentSearchAddress} numberOfLines={1}>
+                          {search.address}
+                        </Text>
+                        {(search.city || search.state) && (
+                          <Text style={styles.recentSearchCity} numberOfLines={1}>
+                            {[search.city, search.state].filter(Boolean).join(', ')}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
             <Card padding="md">
               <Text style={styles.formTitle}>Property Lookup</Text>
               <Text style={styles.formSubtitle}>
                 Search any U.S. property address to get valuation, owner info, and sales history.
               </Text>
 
-              <Input
-                label="Street Address"
-                placeholder="123 Main Street"
-                value={address}
-                onChangeText={setAddress}
-                autoCapitalize="words"
-                required
+              <AddressAutocomplete
+                label="Property Address"
+                placeholder="Start typing an address..."
+                onAddressSelected={(parsed: ParsedAddress) => {
+                  setAddress(parsed.streetAddress)
+                  setCity(parsed.city)
+                  setState(parsed.state)
+                  // Auto-search after selecting an address
+                  setTimeout(() => handleSearchProperty(), 100)
+                }}
               />
 
-              <View style={styles.formRow}>
-                <View style={styles.formCol}>
-                  <Input
-                    label="City"
-                    placeholder="Chicago"
-                    value={city}
-                    onChangeText={setCity}
-                    autoCapitalize="words"
-                  />
+              {/* Show selected address details */}
+              {address && (
+                <View style={styles.selectedAddressContainer}>
+                  <Text style={styles.selectedAddressLabel}>Selected:</Text>
+                  <Text style={styles.selectedAddressText}>
+                    {address}{city ? `, ${city}` : ''}{state ? `, ${state}` : ''}
+                  </Text>
                 </View>
-                <View style={styles.formColSmall}>
-                  <Input
-                    label="State"
-                    placeholder="IL"
-                    value={state}
-                    onChangeText={setState}
-                    autoCapitalize="characters"
-                    maxLength={2}
-                  />
-                </View>
-              </View>
+              )}
 
               <Button
                 variant="primary"
                 onPress={handleSearchProperty}
                 disabled={searchingProperty || !address.trim()}
               >
-                {searchingProperty ? 'Searching ATTOM...' : 'Search Property'}
+                {searchingProperty ? 'Hunting...' : 'Search Property'}
               </Button>
             </Card>
 
@@ -761,7 +1062,7 @@ export default function SearchScreen() {
             {searchingProperty && (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={colors.brand[500]} />
-                <Text style={styles.loadingText}>Searching ATTOM database...</Text>
+                <Text style={styles.loadingText}>Mantis hunting property intel...</Text>
                 <Text style={styles.loadingSubtext}>This may take a few seconds</Text>
               </View>
             )}
@@ -769,18 +1070,88 @@ export default function SearchScreen() {
             {/* Result */}
             {propertyResult && !searchingProperty && (
               <View style={{ marginTop: spacing.md }}>
-                {propertyResult.cached && (
-                  <View style={styles.cachedBadge}>
-                    <Text style={styles.cachedBadgeText}>📋 Cached Result</Text>
+                {/* View Mode Toggle */}
+                <View style={styles.viewModeToggleContainer}>
+                  {propertyResult.cached && (
+                    <View style={styles.cachedBadge}>
+                      <Text style={styles.cachedBadgeText}>📋 Cached</Text>
+                    </View>
+                  )}
+                  <View style={styles.viewModeToggle}>
+                    <TouchableOpacity
+                      style={[styles.viewModeButton, propertyViewMode === 'list' && styles.viewModeButtonActive]}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                        setPropertyViewMode('list')
+                      }}
+                    >
+                      <Text style={styles.viewModeIcon}>📋</Text>
+                      <Text style={[styles.viewModeText, propertyViewMode === 'list' && styles.viewModeTextActive]}>List</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.viewModeButton, propertyViewMode === 'map' && styles.viewModeButtonActive]}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
+                        setPropertyViewMode('map')
+                      }}
+                    >
+                      <Text style={styles.viewModeIcon}>🗺️</Text>
+                      <Text style={[styles.viewModeText, propertyViewMode === 'map' && styles.viewModeTextActive]}>Map</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* List View */}
+                {propertyViewMode === 'list' && (
+                  <PropertyCard
+                    property={propertyResult.property}
+                    cacheId={propertyResult.cacheId}
+                    onViewDetails={handleViewDetails}
+                    onAddToDeal={handleAddToDeal}
+                    loading={creating}
+                  />
+                )}
+
+                {/* Map View */}
+                {propertyViewMode === 'map' && (
+                  <View style={styles.mapContainer}>
+                    <FlipMantisMap
+                      initialCenter={[
+                        propertyResult.property?.location?.longitude || -87.6298,
+                        propertyResult.property?.location?.latitude || 41.8781
+                      ]}
+                      initialZoom={15}
+                      pins={[{
+                        id: 'property-result',
+                        lat: propertyResult.property?.location?.latitude || 41.8781,
+                        lng: propertyResult.property?.location?.longitude || -87.6298,
+                        label: propertyResult.property?.location?.address || address,
+                        type: 'property',
+                      }]}
+                      showUserLocation={false}
+                      style={styles.map}
+                    />
+                    {/* Property Info Overlay */}
+                    <View style={styles.mapPropertyOverlay}>
+                      <Text style={styles.mapPropertyAddress} numberOfLines={1}>
+                        {propertyResult.property?.location?.address || address}
+                      </Text>
+                      {propertyResult.property?.valuation?.avm > 0 && (
+                        <Text style={styles.mapPropertyValue}>
+                          ${propertyResult.property.valuation.avm.toLocaleString()}
+                        </Text>
+                      )}
+                      <View style={styles.mapPropertyActions}>
+                        <Button variant="primary" size="sm" onPress={handleViewDetails}>
+                          View Details
+                        </Button>
+                        <Button variant="outline" size="sm" onPress={handleAddToDeal} disabled={creating}>
+                          {creating ? 'Adding...' : 'Add to Pipeline'}
+                        </Button>
+                      </View>
+                    </View>
                   </View>
                 )}
-                <PropertyCard
-                  property={propertyResult.property}
-                  cacheId={propertyResult.cacheId}
-                  onViewDetails={handleViewDetails}
-                  onAddToDeal={handleAddToDeal}
-                  loading={creating}
-                />
               </View>
             )}
 
@@ -839,6 +1210,25 @@ export default function SearchScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Trial Limit Modal */}
+      {trialLimitData && (
+        <TrialLimitModal
+          visible={showTrialLimitModal}
+          onClose={() => {
+            setShowTrialLimitModal(false)
+            setTrialLimitData(null)
+          }}
+          feature={trialLimitData.feature}
+          used={trialLimitData.used}
+          trialLimit={trialLimitData.trialLimit}
+          paidLimit={trialLimitData.paidLimit}
+          costPerUnit={trialLimitData.costPerUnit}
+          dailyUsed={trialLimitData.dailyUsed}
+          dailyLimit={trialLimitData.dailyLimit}
+          isDailyLimit={trialLimitData.isDailyLimit}
+        />
+      )}
     </SafeAreaView>
   )
 }
@@ -1043,6 +1433,25 @@ const styles = StyleSheet.create({
     flex: 2,
   },
   formColSmall: {
+    flex: 1,
+  },
+  selectedAddressContainer: {
+    backgroundColor: colors.brand[50],
+    borderRadius: radii.md,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  selectedAddressLabel: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[600],
+    fontWeight: typography.fontWeight.medium,
+  },
+  selectedAddressText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[800],
     flex: 1,
   },
   errorContainer: {
@@ -1413,5 +1822,328 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.sm,
     color: colors.slate[500],
     marginTop: spacing.sm,
+  },
+  // Recent Searches styles
+  recentSearchesContainer: {
+    marginBottom: spacing.md,
+  },
+  recentSearchesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  recentSearchesTitle: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.slate[600],
+  },
+  recentSearchesClear: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[500],
+    fontWeight: typography.fontWeight.medium,
+  },
+  recentSearchesScroll: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  recentSearchChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    borderColor: colors.slate[200],
+    gap: spacing.sm,
+    maxWidth: 200,
+    ...shadows.soft,
+  },
+  recentSearchIcon: {
+    fontSize: 16,
+  },
+  recentSearchContent: {
+    flex: 1,
+    minWidth: 0,
+  },
+  recentSearchAddress: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.ink,
+  },
+  recentSearchCity: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+    marginTop: 1,
+  },
+  // Contact Info styles
+  contactInfoSection: {
+    paddingTop: spacing.sm,
+    marginTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.slate[100],
+  },
+  contactInfoLabel: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.slate[500],
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing.sm,
+  },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+  },
+  contactInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: spacing.sm,
+  },
+  contactIcon: {
+    fontSize: 14,
+  },
+  contactText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.ink,
+    flex: 1,
+  },
+  contactActions: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
+  contactButton: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    backgroundColor: colors.brand[50],
+    borderRadius: radii.md,
+  },
+  contactButtonText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.brand[600],
+  },
+  // Market Alert Banner container
+  marketAlertContainer: {
+    marginBottom: spacing.md,
+    marginHorizontal: -spacing.md,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+  },
+  // View Mode Toggle styles
+  viewModeToggleContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.md,
+  },
+  viewModeToggle: {
+    flexDirection: 'row',
+    backgroundColor: colors.slate[100],
+    borderRadius: radii.lg,
+    padding: 4,
+  },
+  viewModeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    gap: spacing.xs,
+  },
+  viewModeButtonActive: {
+    backgroundColor: colors.white,
+    ...shadows.soft,
+  },
+  viewModeIcon: {
+    fontSize: 14,
+  },
+  viewModeText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    fontWeight: typography.fontWeight.medium,
+  },
+  viewModeTextActive: {
+    color: colors.brand[600],
+  },
+  // Map View styles
+  mapContainer: {
+    height: 400,
+    borderRadius: radii.lg,
+    overflow: 'hidden',
+    backgroundColor: colors.slate[100],
+  },
+  map: {
+    flex: 1,
+  },
+  mapPropertyOverlay: {
+    position: 'absolute',
+    bottom: spacing.md,
+    left: spacing.md,
+    right: spacing.md,
+    backgroundColor: colors.white,
+    borderRadius: radii.lg,
+    padding: spacing.md,
+    ...shadows.card,
+  },
+  mapPropertyAddress: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    marginBottom: spacing.xs,
+  },
+  mapPropertyValue: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.brand[600],
+    marginBottom: spacing.sm,
+  },
+  mapPropertyActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  // Comps Preview styles
+  compsSection: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.slate[100],
+  },
+  compsToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.sm,
+  },
+  compsToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  compsToggleIcon: {
+    fontSize: 16,
+  },
+  compsToggleText: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.brand[600],
+  },
+  compsToggleArrow: {
+    fontSize: 12,
+    color: colors.slate[400],
+  },
+  compsContent: {
+    paddingTop: spacing.sm,
+  },
+  compsLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.md,
+    gap: spacing.sm,
+  },
+  compsLoadingText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+  },
+  arvSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brand[50],
+    borderRadius: radii.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+    gap: spacing.lg,
+  },
+  arvItem: {
+    flex: 1,
+  },
+  arvLabel: {
+    fontSize: typography.fontSize.xs,
+    color: colors.brand[600],
+    marginBottom: 2,
+  },
+  arvValue: {
+    fontSize: typography.fontSize.lg,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.brand[700],
+  },
+  confidenceBadge: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radii.full,
+  },
+  confidenceHigh: {
+    backgroundColor: colors.success[100],
+  },
+  confidenceMedium: {
+    backgroundColor: colors.warning[100],
+  },
+  confidenceLow: {
+    backgroundColor: colors.slate[100],
+  },
+  confidenceText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: typography.fontWeight.semibold,
+    color: colors.ink,
+    textTransform: 'capitalize',
+  },
+  compCard: {
+    backgroundColor: colors.slate[50],
+    borderRadius: radii.md,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  compHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  compAddress: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.medium,
+    color: colors.ink,
+    flex: 1,
+    marginRight: spacing.sm,
+  },
+  compDistance: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+  },
+  compDetails: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  compPrice: {
+    fontSize: typography.fontSize.base,
+    fontWeight: typography.fontWeight.bold,
+    color: colors.success[600],
+  },
+  compMeta: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[500],
+  },
+  compDate: {
+    fontSize: typography.fontSize.xs,
+    color: colors.slate[400],
+  },
+  compsMoreText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.brand[500],
+    textAlign: 'center',
+    paddingVertical: spacing.xs,
+  },
+  compsEmptyText: {
+    fontSize: typography.fontSize.sm,
+    color: colors.slate[500],
+    textAlign: 'center',
+    paddingVertical: spacing.md,
   },
 })

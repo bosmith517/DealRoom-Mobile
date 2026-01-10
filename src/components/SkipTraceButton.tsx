@@ -3,7 +3,7 @@
  *
  * Button to trigger skip trace lookup for a lead.
  * Shows loading state during lookup, confirmation dialog with cost,
- * and alerts on litigator detection.
+ * alerts on litigator detection, and handles trial limit errors.
  */
 
 import React, { useState, useCallback } from 'react'
@@ -19,7 +19,8 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { colors, radii, spacing, typography } from '../theme'
-import { skipTraceService, type SkipTraceResult, type SkipTraceQuote } from '../services'
+import { skipTraceService, UsageLimitError, type SkipTraceResult, type SkipTraceQuote } from '../services'
+import { TrialLimitModal } from './TrialLimitModal'
 
 type ButtonVariant = 'full' | 'compact' | 'icon'
 
@@ -45,6 +46,32 @@ export function SkipTraceButton({
 }: SkipTraceButtonProps) {
   const [loading, setLoading] = useState(false)
   const [completed, setCompleted] = useState(false)
+
+  // Trial limit modal state
+  const [showTrialLimitModal, setShowTrialLimitModal] = useState(false)
+  const [trialLimitData, setTrialLimitData] = useState<{
+    used: number
+    trialLimit: number
+    paidLimit: number
+    costPerUnit: number
+    dailyUsed?: number
+    dailyLimit?: number
+    isDailyLimit: boolean
+  } | null>(null)
+
+  // Handle UsageLimitError
+  const handleLimitError = useCallback((err: UsageLimitError) => {
+    setTrialLimitData({
+      used: err.used || 0,
+      trialLimit: err.trialLimit || 10,
+      paidLimit: err.paidLimit || -1,
+      costPerUnit: err.costPerUnit || 0.12,
+      dailyUsed: err.dailyUsed,
+      dailyLimit: err.dailyLimit,
+      isDailyLimit: err.isDailyLimit,
+    })
+    setShowTrialLimitModal(true)
+  }, [])
 
   // Format cost for display
   const formatCost = (cost: number): string => {
@@ -108,13 +135,19 @@ export function SkipTraceButton({
         onError?.(error || 'Unknown error')
       }
     } catch (err) {
+      // Check if this is a usage limit error
+      if (err instanceof UsageLimitError) {
+        handleLimitError(err)
+        return
+      }
+
       const message = err instanceof Error ? err.message : 'Unknown error'
       Alert.alert('Skip Trace Error', message)
       onError?.(message)
     } finally {
       setLoading(false)
     }
-  }, [leadId, onComplete, onError])
+  }, [leadId, onComplete, onError, handleLimitError])
 
   // Show confirmation dialog
   const showConfirmation = useCallback((quote: SkipTraceQuote) => {
@@ -193,112 +226,149 @@ export function SkipTraceButton({
       onError?.('Unexpected response')
     } catch (err) {
       setLoading(false)
+
+      // Check if this is a usage limit error
+      if (err instanceof UsageLimitError) {
+        handleLimitError(err)
+        return
+      }
+
       const message = err instanceof Error ? err.message : 'Unknown error'
       Alert.alert('Skip Trace Error', message)
       onError?.(message)
     }
-  }, [leadId, loading, disabled, completed, skipConfirmation, onComplete, onError, showConfirmation, executeConfirmedLookup])
+  }, [leadId, loading, disabled, completed, skipConfirmation, onComplete, onError, showConfirmation, executeConfirmedLookup, handleLimitError])
+
+  // Render the trial limit modal (shared across all variants)
+  const renderTrialLimitModal = () => (
+    trialLimitData && (
+      <TrialLimitModal
+        visible={showTrialLimitModal}
+        onClose={() => {
+          setShowTrialLimitModal(false)
+          setTrialLimitData(null)
+        }}
+        feature="skip_trace"
+        used={trialLimitData.used}
+        trialLimit={trialLimitData.trialLimit}
+        paidLimit={trialLimitData.paidLimit}
+        costPerUnit={trialLimitData.costPerUnit}
+        dailyUsed={trialLimitData.dailyUsed}
+        dailyLimit={trialLimitData.dailyLimit}
+        isDailyLimit={trialLimitData.isDailyLimit}
+      />
+    )
+  )
 
   if (variant === 'icon') {
     return (
-      <TouchableOpacity
-        onPress={handlePress}
-        disabled={loading || disabled || completed}
-        activeOpacity={0.7}
-        style={[
-          styles.iconButton,
-          completed && styles.iconButtonCompleted,
-          (disabled || loading) && styles.iconButtonDisabled,
-          style,
-        ]}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color={colors.brand[500]} />
-        ) : completed ? (
-          <Ionicons name="checkmark-circle" size={24} color={colors.success[500]} />
-        ) : (
-          <Ionicons name="person-circle-outline" size={24} color={colors.brand[500]} />
-        )}
-      </TouchableOpacity>
+      <>
+        <TouchableOpacity
+          onPress={handlePress}
+          disabled={loading || disabled || completed}
+          activeOpacity={0.7}
+          style={[
+            styles.iconButton,
+            completed && styles.iconButtonCompleted,
+            (disabled || loading) && styles.iconButtonDisabled,
+            style,
+          ]}
+        >
+          {loading ? (
+            <ActivityIndicator size="small" color={colors.brand[500]} />
+          ) : completed ? (
+            <Ionicons name="checkmark-circle" size={24} color={colors.success[500]} />
+          ) : (
+            <Ionicons name="person-circle-outline" size={24} color={colors.brand[500]} />
+          )}
+        </TouchableOpacity>
+        {renderTrialLimitModal()}
+      </>
     )
   }
 
   if (variant === 'compact') {
     return (
-      <TouchableOpacity
-        onPress={handlePress}
-        disabled={loading || disabled || completed}
-        activeOpacity={0.7}
-        style={[
-          styles.compactButton,
-          completed && styles.compactButtonCompleted,
-          (disabled || loading) && styles.compactButtonDisabled,
-          style,
-        ]}
-      >
-        {loading ? (
-          <ActivityIndicator size="small" color={colors.white} />
-        ) : completed ? (
-          <>
-            <Ionicons name="checkmark" size={16} color={colors.white} />
-            <Text style={styles.compactText}>Traced</Text>
-          </>
-        ) : (
-          <>
-            <Ionicons name="search" size={16} color={colors.white} />
-            <Text style={styles.compactText}>Skip Trace</Text>
-          </>
-        )}
-      </TouchableOpacity>
+      <>
+        <TouchableOpacity
+          onPress={handlePress}
+          disabled={loading || disabled || completed}
+          activeOpacity={0.7}
+          style={[
+            styles.compactButton,
+            completed && styles.compactButtonCompleted,
+            (disabled || loading) && styles.compactButtonDisabled,
+            style,
+          ]}
+        >
+          {loading ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : completed ? (
+            <>
+              <Ionicons name="checkmark" size={16} color={colors.white} />
+              <Text style={styles.compactText}>Traced</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="search" size={16} color={colors.white} />
+              <Text style={styles.compactText}>Skip Trace</Text>
+            </>
+          )}
+        </TouchableOpacity>
+        {renderTrialLimitModal()}
+      </>
     )
   }
 
   // Full variant
   return (
-    <TouchableOpacity
-      onPress={handlePress}
-      disabled={loading || disabled || completed}
-      activeOpacity={0.7}
-      style={[
-        styles.fullButton,
-        completed && styles.fullButtonCompleted,
-        (disabled || loading) && styles.fullButtonDisabled,
-        style,
-      ]}
-    >
-      <View style={styles.fullContent}>
-        {loading ? (
-          <>
-            <ActivityIndicator size="small" color={colors.white} style={styles.icon} />
-            <View style={styles.textContainer}>
-              <Text style={styles.fullTitle}>Running Skip Trace...</Text>
-              <Text style={styles.fullSubtitle}>Looking up owner contact info</Text>
-            </View>
-          </>
-        ) : completed ? (
-          <>
-            <View style={[styles.iconCircle, styles.iconCircleSuccess]}>
-              <Ionicons name="checkmark" size={20} color={colors.white} />
-            </View>
-            <View style={styles.textContainer}>
-              <Text style={styles.fullTitle}>Skip Trace Complete</Text>
-              <Text style={styles.fullSubtitle}>Owner info retrieved</Text>
-            </View>
-          </>
-        ) : (
-          <>
-            <View style={styles.iconCircle}>
-              <Ionicons name="person-circle-outline" size={20} color={colors.white} />
-            </View>
-            <View style={styles.textContainer}>
-              <Text style={styles.fullTitle}>Run Skip Trace</Text>
-              <Text style={styles.fullSubtitle}>Get owner contact information</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.white} />
-          </>
-        )}
-      </View>
-    </TouchableOpacity>
+    <>
+      <TouchableOpacity
+        onPress={handlePress}
+        disabled={loading || disabled || completed}
+        activeOpacity={0.7}
+        style={[
+          styles.fullButton,
+          completed && styles.fullButtonCompleted,
+          (disabled || loading) && styles.fullButtonDisabled,
+          style,
+        ]}
+      >
+        <View style={styles.fullContent}>
+          {loading ? (
+            <>
+              <ActivityIndicator size="small" color={colors.white} style={styles.icon} />
+              <View style={styles.textContainer}>
+                <Text style={styles.fullTitle}>Running Skip Trace...</Text>
+                <Text style={styles.fullSubtitle}>Looking up owner contact info</Text>
+              </View>
+            </>
+          ) : completed ? (
+            <>
+              <View style={[styles.iconCircle, styles.iconCircleSuccess]}>
+                <Ionicons name="checkmark" size={20} color={colors.white} />
+              </View>
+              <View style={styles.textContainer}>
+                <Text style={styles.fullTitle}>Skip Trace Complete</Text>
+                <Text style={styles.fullSubtitle}>Owner info retrieved</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.iconCircle}>
+                <Ionicons name="person-circle-outline" size={20} color={colors.white} />
+              </View>
+              <View style={styles.textContainer}>
+                <Text style={styles.fullTitle}>Run Skip Trace</Text>
+                <Text style={styles.fullSubtitle}>Get owner contact information</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.white} />
+            </>
+          )}
+        </View>
+      </TouchableOpacity>
+      {renderTrialLimitModal()}
+    </>
   )
 }
 

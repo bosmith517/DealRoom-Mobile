@@ -19,20 +19,20 @@ import type { UploadQueueItem, UploadStatus } from '../types'
 
 const KEYS = {
   // Cached data
-  DEALS_CACHE: '@dealroom:deals:cache',
-  PROPERTY_CACHE: '@dealroom:property:cache:',
-  EVALUATION_DRAFT: '@dealroom:evaluation:draft:',
+  DEALS_CACHE: '@flipmantis:deals:cache',
+  PROPERTY_CACHE: '@flipmantis:property:cache:',
+  EVALUATION_DRAFT: '@flipmantis:evaluation:draft:',
 
   // Upload queue
-  UPLOAD_QUEUE: '@dealroom:upload:queue',
+  UPLOAD_QUEUE: '@flipmantis:upload:queue',
 
   // Sync state
-  LAST_SYNC: '@dealroom:sync:last',
-  PENDING_MUTATIONS: '@dealroom:sync:mutations',
+  LAST_SYNC: '@flipmantis:sync:last',
+  PENDING_MUTATIONS: '@flipmantis:sync:mutations',
 
   // User preferences
-  MAP_VIEWPORT: '@dealroom:user:mapViewport',
-  OFFLINE_MODE: '@dealroom:user:offlineMode',
+  MAP_VIEWPORT: '@flipmantis:user:mapViewport',
+  OFFLINE_MODE: '@flipmantis:user:offlineMode',
 }
 
 // ============================================================================
@@ -372,8 +372,8 @@ class OfflineService {
 
   clearAll(): void {
     AsyncStorage.getAllKeys().then((keys) => {
-      const dealroomKeys = keys.filter((key) => key.startsWith('@dealroom:'))
-      AsyncStorage.multiRemove(dealroomKeys).catch(console.warn)
+      const flipmantisKeys = keys.filter((key) => key.startsWith('@flipmantis:'))
+      AsyncStorage.multiRemove(flipmantisKeys).catch(console.warn)
     })
   }
 

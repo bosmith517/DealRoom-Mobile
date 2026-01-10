@@ -19,9 +19,9 @@ import {
 } from 'react-native'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Card, Button, SkipTraceButton, SkipTraceResults, ReachWorkflow, ActivityTimeline, AIScoreCard } from '../../src/components'
+import { Card, Button, SkipTraceButton, SkipTraceResults, ReachWorkflow, ActivityTimeline, AIScoreCard, SellerMotivationCard } from '../../src/components'
 import { colors, spacing, typography, radii } from '../../src/theme'
-import { getLead, updateLead, createDeal, skipTraceService, type SkipTraceResult } from '../../src/services'
+import { getLead, updateLead, createDeal, skipTraceService, n8nService, type SkipTraceResult } from '../../src/services'
 import type { Lead, DealStage } from '../../src/types'
 
 // Available tags
@@ -53,6 +53,7 @@ export default function LeadDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [converting, setConverting] = useState(false)
+  const [enriching, setEnriching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [skipTraceResult, setSkipTraceResult] = useState<SkipTraceResult | null>(null)
   const [loadingSkipTrace, setLoadingSkipTrace] = useState(false)
@@ -225,6 +226,34 @@ export default function LeadDetailScreen() {
     ])
   }, [lead, router])
 
+  // Trigger seller enrichment via n8n webhook
+  const handleEnrich = useCallback(async () => {
+    if (!lead) return
+
+    setEnriching(true)
+    try {
+      const result = await n8nService.triggerSellerEnrichment({
+        leadId: lead.id,
+        propertyAddress: address || undefined,
+      })
+
+      if (result.success) {
+        Alert.alert(
+          'Enrichment Started',
+          'Seller data enrichment has been triggered. The motivation score will update shortly.',
+          [{ text: 'OK' }]
+        )
+      } else {
+        Alert.alert('Enrichment Failed', result.error || 'Unable to trigger enrichment')
+      }
+    } catch (err) {
+      console.error('Enrichment error:', err)
+      Alert.alert('Error', 'Failed to trigger seller enrichment')
+    } finally {
+      setEnriching(false)
+    }
+  }, [lead, address])
+
   // Loading state
   if (loading) {
     return (
@@ -333,6 +362,14 @@ export default function LeadDetailScreen() {
           {/* AI Score & Cost */}
           <Text style={styles.inputLabel}>AI Analysis</Text>
           <AIScoreCard leadId={lead.id} />
+
+          {/* Seller Motivation Score from n8n enrichment */}
+          <Text style={styles.inputLabel}>Seller Motivation</Text>
+          <SellerMotivationCard
+            leadId={lead.id}
+            onEnrich={handleEnrich}
+            enriching={enriching}
+          />
 
           {/* Address */}
           <Text style={styles.inputLabel}>Address</Text>

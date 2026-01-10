@@ -15,8 +15,8 @@ export const PRICING_TIERS = {
     limits: {
       deals: 5,
       users: 1,
-      mobileAccess: 'readonly' as const,
-      drivingForDollars: false,
+      mobileAccess: 'full' as const, // D4D is free, so mobile needs full access
+      drivingForDollars: true,        // D4D is FREE (drives paid feature usage)
       swipeTriage: false,
       evaluations: false,
     },

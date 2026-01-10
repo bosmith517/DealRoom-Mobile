@@ -30,6 +30,7 @@ export {
   type DriveSession,
   type DrivePoint,
   type QuickLead,
+  type AddLeadResult,
 } from './useDrivingSession'
 
 export {

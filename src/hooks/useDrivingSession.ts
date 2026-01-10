@@ -153,7 +153,7 @@ async function uploadLeadPhoto(
     // Convert base64 to Uint8Array and upload
     const bytes = base64ToUint8Array(base64Data)
     const { data, error } = await supabase.storage
-      .from('dealroom-media')
+      .from('flipmantis-media')
       .upload(storagePath, bytes, {
         contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
         upsert: false,
@@ -218,6 +218,16 @@ export interface QuickLead {
   voiceUri?: string
 }
 
+// Result returned from addLead with geocoded address info
+export interface AddLeadResult {
+  id: string
+  address: string | null
+  city: string | null
+  state: string | null
+  zip: string | null
+  isCoordinateFallback: boolean
+}
+
 interface UseDrivingSessionReturn {
   // Session state
   session: DriveSession | null
@@ -246,8 +256,9 @@ interface UseDrivingSessionReturn {
   abandonSession: () => Promise<void>
 
   // Lead capture
-  addLead: (lead: QuickLead) => Promise<string | null>
+  addLead: (lead: QuickLead) => Promise<AddLeadResult | null>
   addPhotoToLead: (leadId: string, photoUri: string) => Promise<boolean>
+  updateLeadNotes: (leadId: string, notes: string, tags?: string[]) => Promise<boolean>
 
   // Helpers
   hasLocationPermission: boolean
@@ -256,9 +267,9 @@ interface UseDrivingSessionReturn {
 
 // Storage keys
 const STORAGE_KEYS = {
-  ACTIVE_SESSION: '@dealroom:driving:activeSession',
-  ROUTE_POINTS: '@dealroom:driving:routePoints',
-  PENDING_BATCH: '@dealroom:driving:pendingBatch',
+  ACTIVE_SESSION: '@flipmantis:driving:activeSession',
+  ROUTE_POINTS: '@flipmantis:driving:routePoints',
+  PENDING_BATCH: '@flipmantis:driving:pendingBatch',
 }
 
 // Constants for throttling
@@ -338,30 +349,35 @@ export function useDrivingSession(): UseDrivingSessionReturn {
       sequenceNum: sequenceRef.current++,
     }
 
-    // Update last point reference
+    // Calculate incremental distance BEFORE updating refs
+    // This gives us the accurate distance from last point to new point
+    if (lastPointRef.current) {
+      const segmentDistance = calculateDistance(
+        lastPointRef.current.lat,
+        lastPointRef.current.lng,
+        currentLocation.lat,
+        currentLocation.lng
+      )
+      // Update distance incrementally - much more efficient and reliable
+      setDistanceMiles((prevDistance) => {
+        const newTotal = prevDistance + segmentDistance
+        console.log('[Driving] Distance updated:', prevDistance.toFixed(3), '+', segmentDistance.toFixed(3), '=', newTotal.toFixed(3), 'miles')
+        return newTotal
+      })
+    }
+
+    // Update last point reference AFTER calculating distance
     lastPointRef.current = {
       lat: currentLocation.lat,
       lng: currentLocation.lng,
       time: Date.now(),
     }
 
+    // Add the new point to route and save to storage
     setRoutePoints((prev) => {
       const updated = [...prev, newPoint]
-
-      // Calculate total distance
-      if (updated.length > 1) {
-        let totalDist = 0
-        for (let i = 1; i < updated.length; i++) {
-          totalDist += calculateDistance(
-            updated[i - 1].lat,
-            updated[i - 1].lng,
-            updated[i].lat,
-            updated[i].lng
-          )
-        }
-        setDistanceMiles(totalDist)
-      }
-
+      // Save route points to storage for session recovery
+      AsyncStorage.setItem(STORAGE_KEYS.ROUTE_POINTS, JSON.stringify(updated)).catch(console.warn)
       return updated
     })
 
@@ -376,6 +392,8 @@ export function useDrivingSession(): UseDrivingSessionReturn {
 
       return updated
     })
+
+    console.log('[Driving] Point captured:', currentLocation.lat.toFixed(5), currentLocation.lng.toFixed(5), '| Points:', sequenceRef.current)
   }, [currentLocation, session, shouldCapturePoint])
 
   // Batch upload function
@@ -600,21 +618,47 @@ export function useDrivingSession(): UseDrivingSessionReturn {
 
       setSession(sessionObj)
       setStartTime(now)
-      setRoutePoints([])
-      setPendingBatch([])
       setDistanceMiles(0)
       setLeadsCount(0)
-      setPointCount(0)
       sequenceRef.current = 0
-      lastPointRef.current = null
+
+      // Initialize first route point if we have a location
+      let initialPoints: DrivePoint[] = []
+      if (loc) {
+        const firstPoint: DrivePoint = {
+          sessionId: newSession.id,
+          lat: loc.lat,
+          lng: loc.lng,
+          accuracy: loc.accuracy,
+          altitude: loc.altitude,
+          heading: loc.heading,
+          speedMph: loc.speed ? loc.speed * 2.237 : null,
+          capturedAt: now.toISOString(),
+          sequenceNum: sequenceRef.current++,
+        }
+        initialPoints = [firstPoint]
+        // Set last point ref so next point calculates distance correctly
+        lastPointRef.current = {
+          lat: loc.lat,
+          lng: loc.lng,
+          time: Date.now(),
+        }
+        console.log('[DrivingSession] First point captured:', loc.lat, loc.lng)
+      } else {
+        lastPointRef.current = null
+      }
+
+      setRoutePoints(initialPoints)
+      setPendingBatch(initialPoints)
+      setPointCount(initialPoints.length)
 
       // Save to storage
       await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION, JSON.stringify(sessionObj))
-      await AsyncStorage.setItem(STORAGE_KEYS.ROUTE_POINTS, '[]')
-      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_BATCH, '[]')
+      await AsyncStorage.setItem(STORAGE_KEYS.ROUTE_POINTS, JSON.stringify(initialPoints))
+      await AsyncStorage.setItem(STORAGE_KEYS.PENDING_BATCH, JSON.stringify(initialPoints))
 
       // Note: Tracking already started at beginning of startSession()
-      console.log('[DrivingSession] Session started successfully')
+      console.log('[DrivingSession] Session started successfully with', initialPoints.length, 'initial points')
 
       return true
     } catch (err) {
@@ -768,7 +812,7 @@ export function useDrivingSession(): UseDrivingSessionReturn {
   }, [session, stopTracking])
 
   // Add lead
-  const addLead = useCallback(async (lead: QuickLead): Promise<string | null> => {
+  const addLead = useCallback(async (lead: QuickLead): Promise<AddLeadResult | null> => {
     if (!session) {
       console.error('No active session to add lead to')
       return null
@@ -799,6 +843,7 @@ export function useDrivingSession(): UseDrivingSessionReturn {
         city: lead.city || null,
         state: lead.state || null,
         zip: lead.zip || null,
+        isCoordinateFallback: false,
       }
 
       if (!lead.address && lead.lat && lead.lng) {
@@ -915,7 +960,15 @@ export function useDrivingSession(): UseDrivingSessionReturn {
       setSession(updatedSession)
       await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION, JSON.stringify(updatedSession))
 
-      return newLead.id
+      // Return full result with address info for notifications
+      return {
+        id: newLead.id,
+        address: addressData.address,
+        city: addressData.city,
+        state: addressData.state,
+        zip: addressData.zip,
+        isCoordinateFallback: addressData.isCoordinateFallback || false,
+      }
     } catch (err: any) {
       console.error('[DrivingSession] Error adding lead:', err?.message || err)
       // Return error message for better debugging
@@ -976,6 +1029,52 @@ export function useDrivingSession(): UseDrivingSessionReturn {
     }
   }, [])
 
+  // Update notes and tags on an existing lead
+  const updateLeadNotes = useCallback(async (leadId: string, notes: string, tags?: string[]): Promise<boolean> => {
+    try {
+      console.log('[DrivingSession] Updating notes for lead:', leadId)
+
+      // Update the lead's notes
+      const { error: updateError } = await supabase
+        .from('dealroom_leads')
+        .update({ notes })
+        .eq('id', leadId)
+
+      if (updateError) {
+        console.error('[DrivingSession] Failed to update lead notes:', updateError.message)
+        return false
+      }
+
+      // If tags provided, update tags as well
+      if (tags && tags.length > 0) {
+        // First delete existing tags
+        await supabase
+          .from('dealroom_lead_tags')
+          .delete()
+          .eq('lead_id', leadId)
+
+        // Insert new tags
+        const tagInserts = tags.map((tagKey) => ({
+          lead_id: leadId,
+          tag_key: tagKey,
+          tag_label: tagKey.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+        }))
+
+        const { error: tagError } = await supabase.from('dealroom_lead_tags').insert(tagInserts)
+        if (tagError) {
+          console.warn('[DrivingSession] Failed to update tags:', tagError.message)
+          // Non-fatal - notes were updated
+        }
+      }
+
+      console.log('[DrivingSession] Lead notes updated successfully')
+      return true
+    } catch (err: any) {
+      console.error('[DrivingSession] Error updating lead notes:', err?.message || err)
+      return false
+    }
+  }, [])
+
   return {
     session,
     isActive: session?.status === 'active',
@@ -995,6 +1094,7 @@ export function useDrivingSession(): UseDrivingSessionReturn {
     abandonSession,
     addLead,
     addPhotoToLead,
+    updateLeadNotes,
     hasLocationPermission,
     requestLocationPermission,
   }

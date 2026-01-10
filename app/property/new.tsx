@@ -265,6 +265,11 @@ export default function NewDealScreen() {
           options={{
             title: 'New Deal',
             headerShown: true,
+            headerLeft: () => (
+              <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                <Text style={styles.backButtonText}>← Back</Text>
+              </TouchableOpacity>
+            ),
           }}
         />
         <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -323,7 +328,7 @@ export default function NewDealScreen() {
               <View style={styles.optionInfo}>
                 <Text style={styles.optionTitle}>Manual Entry</Text>
                 <Text style={styles.optionDesc}>
-                  Quickly add a deal with just an address - no ATTOM lookup required
+                  Quickly add a deal with just an address
                 </Text>
               </View>
               <Text style={styles.optionArrow}>→</Text>
@@ -366,7 +371,7 @@ export default function NewDealScreen() {
           >
             <Text style={styles.formTitle}>Quick Add Deal</Text>
             <Text style={styles.formSubtitle}>
-              Enter the property address to create a deal. You can enrich with ATTOM data
+              Enter the property address to create a deal. Mantis can enrich with intel
               later.
             </Text>
 
